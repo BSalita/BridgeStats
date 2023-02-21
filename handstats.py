@@ -78,7 +78,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     with st.spinner(text="Selecting database rows ..."):
         start_time = time.time()
-        query = create_query(acbl_hand_records_augmented_filename, brs_regex, sample_size) # 'arrow_table', 
+        query = create_query(database_name, brs_regex, sample_size)
         query = st.text_input('Sql query',value=query,label_visibility='hidden', key=key_prefix+'_HandRecord-query') # either use initial query or let user change query
         selected_df = duckdb.arrow(hand_records_arrow).query('hand_records', query).to_df() # todo: can this be cached?
         selected_df = selected_df.drop_duplicates(subset="board_record_string") # using only unique hands (unique board_record_string) otherwise the dups will be double counted.
