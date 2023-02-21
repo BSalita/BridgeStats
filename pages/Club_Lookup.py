@@ -26,12 +26,12 @@ st.sidebar.header("Settings for Club Lookup")
 st.sidebar.header("Settings")
 
 rootPath = pathlib.Path('.')
-acblPath = rootPath.joinpath('.')
+dataPath = rootPath.joinpath('data')
 
-acbl_club_dict_filename = 'acbl_clubs.parquet'
-acbl_club_dict_file = acblPath.joinpath(acbl_club_dict_filename)
 with st.spinner(text="Reading data ..."):
     start_time = time.time()
+    acbl_club_dict_filename = 'acbl_clubs.parquet'
+    acbl_club_dict_file = dataPath.joinpath(acbl_club_dict_filename)
     acbl_club_df = load_club_df(acbl_club_dict_file)
     end_time = time.time()
     st.caption(f"Data read completed in {round(end_time-start_time,2)} seconds.")
