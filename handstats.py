@@ -39,9 +39,10 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     key_prefix = club_or_tournament # pair_or_player isn't used here
 
     rootPath = pathlib.Path('.')
-    acblPath = rootPath.joinpath('data')
+    dataPath = rootPath.joinpath('data')
 
     acbl_hand_records_augmented_filename = f"acbl_{club_or_tournament}_hand_records_augmented_narrow.parquet"
+    acbl_hand_records_augmented_file = dataPath.joinpath(acbl_hand_records_augmented_filename)
 
     # tournament data is as early as 2013? club data as early as 2019?
     start_date = st.sidebar.text_input('Enter start date:', value='2000-01-01', key=key_prefix+'_HandRecord-Start_Date', help='Enter starting date in YYYY-MM-DD format. Earliest year is 2019')
@@ -63,13 +64,13 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     st.warning('Table and charts take up to 30 to 60 seconds to render.')
 
-    with st.spinner(text="Reading data ..."):
+    with st.spinner(text="Reading hand record data ..."):
         start_time = time.time()
         database_name = 'hand_records_arrow'
         if club_or_tournament == 'club':
-            hand_records_arrow = bridgestatslib.load_club_hand_records(acbl_hand_records_augmented_filename)
+            hand_records_arrow = bridgestatslib.load_club_hand_records(acbl_hand_records_augmented_file)
         else:
-            hand_records_arrow = bridgestatslib.load_tournament_hand_records(acbl_hand_records_augmented_filename)
+            hand_records_arrow = bridgestatslib.load_tournament_hand_records(acbl_hand_records_augmented_file)
         hand_records_len = hand_records_arrow.num_rows
         database_column_names = hand_records_arrow.column_names
         end_time = time.time()

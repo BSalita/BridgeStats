@@ -55,19 +55,21 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     rootPath = pathlib.Path('.')
     dataPath = rootPath.joinpath('data')
 
-    acbl_player_d_filename = f"acbl_{club_or_tournament}_player_name_dict.pkl"
-    acbl_player_d_file = dataPath.joinpath(acbl_player_d_filename)
-    if club_or_tournament == 'club':
-        acbl_player_d = bridgestatslib.load_club_player_d(acbl_player_d_file)
-    else:
-        acbl_player_d = bridgestatslib.load_tournament_player_d(acbl_player_d_file)
+    with st.spinner(text="Reading player data ..."):
+        acbl_player_d_filename = f"acbl_{club_or_tournament}_player_name_dict.pkl"
+        acbl_player_d_file = dataPath.joinpath(acbl_player_d_filename)
+        if club_or_tournament == 'club':
+            acbl_player_d = bridgestatslib.load_club_player_d(acbl_player_d_file)
+        else:
+            acbl_player_d = bridgestatslib.load_tournament_player_d(acbl_player_d_file)
 
-    acbl_hand_records_d_filename = f"acbl_{club_or_tournament}_hand_records_d.pkl"
-    acbl_hand_records_d_file = dataPath.joinpath(acbl_hand_records_d_filename)
-    if club_or_tournament == 'club':
-        hrd = bridgestatslib.load_club_hand_records_d(acbl_hand_records_d_file)
-    else:
-        hrd = bridgestatslib.load_tournament_hand_records_d(acbl_hand_records_d_file)
+    with st.spinner(text="Reading hand record data ..."):
+        acbl_hand_records_d_filename = f"acbl_{club_or_tournament}_hand_records_d.pkl"
+        acbl_hand_records_d_file = dataPath.joinpath(acbl_hand_records_d_filename)
+        if club_or_tournament == 'club':
+            hrd = bridgestatslib.load_club_hand_records_d(acbl_hand_records_d_file)
+        else:
+            hrd = bridgestatslib.load_tournament_hand_records_d(acbl_hand_records_d_file)
 
     # Data source for dataframe
     acbl_board_results_augmented_filename = f"acbl_{club_or_tournament}_board_results_augmented.parquet"
@@ -152,7 +154,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     st.warning('Table and charts take from a few seconds to 120 seconds to render. Please be patient. Wait for the man in the upper-right corner to stop. Initial load is slower.')
 
-    with st.spinner(text="Reading data ..."):
+    with st.spinner(text="Reading board result data ..."):
         start_time = time.time()
         database_name = 'board_results_arrow'
         if club_or_tournament == 'club':
