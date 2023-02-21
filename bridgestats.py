@@ -53,17 +53,17 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     key_prefix = groupby[0]+club_or_tournament+'_'+pair_or_player # assumes groupby[0] is unique
 
     rootPath = pathlib.Path('.')
-    acblPath = rootPath.joinpath('.')
+    dataPath = rootPath.joinpath('data')
 
     acbl_player_d_filename = f"acbl_{club_or_tournament}_player_name_dict.pkl"
-    acbl_player_d_file = acblPath.joinpath(acbl_player_d_filename)
+    acbl_player_d_file = dataPath.joinpath(acbl_player_d_filename)
     if club_or_tournament == 'club':
         acbl_player_d = bridgestatslib.load_club_player_d(acbl_player_d_file)
     else:
         acbl_player_d = bridgestatslib.load_tournament_player_d(acbl_player_d_file)
 
     acbl_hand_records_d_filename = f"acbl_{club_or_tournament}_hand_records_d.pkl"
-    acbl_hand_records_d_file = acblPath.joinpath(acbl_hand_records_d_filename)
+    acbl_hand_records_d_file = dataPath.joinpath(acbl_hand_records_d_filename)
     if club_or_tournament == 'club':
         hrd = bridgestatslib.load_club_hand_records_d(acbl_hand_records_d_file)
     else:
