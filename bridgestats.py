@@ -73,6 +73,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     # Data source for dataframe
     acbl_board_results_augmented_filename = f"acbl_{club_or_tournament}_board_results_augmented.parquet"
+    acbl_board_results_augmented_file = dataPath.joinpath(acbl_board_results_augmented_filename)
 
     # todo: implement verification of club numbers by looking them up in dict? At least check for 6 digits.
     # 108571 is Fort Lauderdale, 267096 is Fort Lauderdale Quick Tricks, 204891 Hilton Head
@@ -158,9 +159,9 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         start_time = time.time()
         database_name = 'board_results_arrow'
         if club_or_tournament == 'club':
-            board_results_arrow = bridgestatslib.load_club_board_results(acbl_board_results_augmented_filename)
+            board_results_arrow = bridgestatslib.load_club_board_results(acbl_board_results_augmented_file)
         else:
-            board_results_arrow = bridgestatslib.load_tournament_board_results(acbl_board_results_augmented_filename)
+            board_results_arrow = bridgestatslib.load_tournament_board_results(acbl_board_results_augmented_file)
         board_results_len = board_results_arrow.num_rows
         database_column_names = board_results_arrow.column_names
         end_time = time.time()
