@@ -1,0 +1,10 @@
+# do not list libraries built into python. e.g. json, pickle, time
+# not sure why altair doesn't need to be listed. Maybe because it's only used internal to streamlit?
+duckdb
+matplotlib
+pandas
+pyarrow
+requests
+seaborn
+streamlit
+streamlit-aggrid
