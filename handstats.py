@@ -88,7 +88,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         selected_df = selected_df[selected_df['Date'].between(start_date,end_date)]
         selected_df_len = len(selected_df)
         end_time = time.time()
-        st.info(f"Query completed in {round(end_time-start_time,2)} seconds. Database has {hand_records_len} rows. Sampling {sample_size} random rows.  {uniques} unique hands found. {selected_df_len} rows selected and aggregated.")
+        st.info(f"Query completed in {round(end_time-start_time,2)} seconds. Database has {hand_records_len} rows. Sampling {sample_size} random rows.  {uniques} unique hands found.")
 
     # prepare data columns
     selected_df.drop([col for col in selected_df if col.startswith('__')],axis='columns',inplace=True) # remove cols beginning with '__'
