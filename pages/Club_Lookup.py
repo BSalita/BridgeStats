@@ -12,10 +12,6 @@ import altair as alt
 import time
 import streamlitlib
 
-@st.experimental_singleton()
-def load_club_df(filename):
-    acbl_club_df = pd.read_parquet(filename)
-    return acbl_club_df
 
 #st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 #streamlitlib.widen_scrollbars()

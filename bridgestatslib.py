@@ -51,6 +51,11 @@ def load_player_info_df(filename):
 
 
 @st.cache_resource()
+def load_club_df(filename):
+    return pd.read_parquet(filename)
+
+
+@st.cache_resource()
 def load_tournament_player_d(filename):
     return pd.read_pickle(filename)
 
@@ -61,7 +66,7 @@ def load_tournament_hand_records_d(filename):
 
 
 # uncacheable due to arrow_table. just leave as a helper function.
-@st.cache_resource()
+#@st.cache_resource()
 def duckdb_arrow_to_df(_arrow_table, query):
     return duckdb.arrow(_arrow_table).query('arrow_table', query).to_df()
 
