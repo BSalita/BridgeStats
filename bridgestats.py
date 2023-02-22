@@ -79,8 +79,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # 108571 is Fort Lauderdale, 267096 is Fort Lauderdale Quick Tricks, 204891 Hilton Head
     if club_or_tournament == 'club':
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
-        clubs = st.sidebar.text_input('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all):',
-                                      placeholder='Enter club Numbers', key=key_prefix+'-Clubs')
+        clubs = st.sidebar.selectbox('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all):',
+                                      options=['','108571','267096'], key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number.')
         clubs = clubs.replace(',', ' ').replace('_', ' ').split()
         clubs = [] if clubs == [''] else clubs
 
@@ -94,7 +94,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     if pair_or_player == 'player':
         # 2663279 (Robert Salita), 2454602 (Kerry Flom), 6811434 (Mark Itabishi?), 1709925 (Neil Silverman) 2997630 (Bella Ionis-Sorren), 4464109 (Curley Anderson)
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
-        players = st.sidebar.text_input('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all):', placeholder='Enter Player Numbers', key=key_prefix+'-Players')
+        players = st.sidebar.selectbox('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all):', options=['','2663279'], key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number.')
         players = players.replace(',',' ').replace('_',' ').split()
         players = [] if players == [''] else players
 
@@ -144,7 +144,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     # tournament data is as early as 2013? club data as early as 2019?
     start_date = st.sidebar.text_input('Enter start date:', value='2019-01-01', key=key_prefix+'-Start_Date', help='Enter starting date in YYYY-MM-DD format. Earliest year is 2019')
-    end_date_default = time.strftime("%Y-%m-%d")
+    end_date_default = time.strftime('%Y-%m-%d')
     end_date = st.sidebar.text_input('Enter end date:', value=end_date_default, key=key_prefix+'-End_Date', help='Enter ending date in YYYY-MM-DD format.')
 
     minimum_mps_value = 0 if len(players) or len(pairs) else 300
@@ -153,7 +153,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # todo: make 9999999 into a variable.
     maximum_mps = st.sidebar.number_input('Enter maximum master points (default is 9999999):', value=9999999, max_value=9999999, key=key_prefix+'-MP_Max')
 
-    st.warning('Table and charts take from a few seconds to 120 seconds to render. Please be patient. Wait for the man in the upper-right corner to stop. Initial load is slower.')
+    st.warning('Table and charts take from a few seconds to 120 seconds to render. Please be patient. Wait for the man in the upper-right corner to stop running ... Initial load is slowest.')
 
     with st.spinner(text="Reading board result data ..."):
         start_time = time.time()
