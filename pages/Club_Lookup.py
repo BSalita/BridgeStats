@@ -10,6 +10,7 @@ import pandas as pd
 #import matplotlib.pyplot as plt
 import altair as alt
 import time
+import bridgestatslib
 import streamlitlib
 
 
@@ -28,7 +29,7 @@ with st.spinner(text="Reading data ..."):
     start_time = time.time()
     acbl_club_dict_filename = 'acbl_clubs.parquet'
     acbl_club_dict_file = dataPath.joinpath(acbl_club_dict_filename)
-    acbl_club_df = load_club_df(acbl_club_dict_file)
+    acbl_club_df = bridgestatslib.load_club_df(acbl_club_dict_file)
     end_time = time.time()
     st.caption(f"Data read completed in {round(end_time-start_time,2)} seconds.")
 
