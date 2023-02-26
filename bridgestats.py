@@ -96,7 +96,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         # 2663279 (Robert Salita), 2454602 (Kerry Flom), 6811434 (Mark Itabishi?), 1709925 (Neil Silverman) 2997630 (Bella Ionis-Sorren), 4464109 (Curley Anderson)
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
         #players = st.sidebar.selectbox('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all):', options=['','2663279'], key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number.')
-        players = st.sidebar.text_input('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all). Examples: 2663279 9524304 6941303 6951346', placeholder='Enter player numbers', key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number. Examples: 2663279 9524304 6941303 6951346')
+        players = st.sidebar.text_input('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all). Examples: 2663279 9524304 6941303 6941346', placeholder='Enter player numbers', key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number. Examples: 2663279 9524304 6941303 6941346')
         players = players.replace(',',' ').replace('_',' ').split()
         players = [] if players == [''] else players
 
@@ -113,7 +113,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     if pair_or_player == 'pair':
         # todo: pairs need to have lowest number acbl number first.
         # 1709925_6811434 (Neil Silverman, Mark Itabashi), 2130335_2342200 (Lee Atkinson and Jack Jones), 2997630_4441389 (Bella, Titus), 2130335_2342200 2997630_4441389
-        pairs = st.sidebar.text_input('Pair ACBL Numbers - Restrict results to these pairs. Use two 7 digit ACBL player numbers separated by an underscore (empty means all). Examples: 2663279_9524304  6941303_6951346', placeholder='Enter Pair Numbers', key=key_prefix+'-Pairs') # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
+        pairs = st.sidebar.text_input('Pair ACBL Numbers - Restrict results to these pairs. Use two 7 digit ACBL player numbers separated by an underscore (empty means all). Examples: 2663279_9524304  6941303_6941346', placeholder='Enter Pair Numbers', key=key_prefix+'-Pairs') # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
         pairs = pairs.replace(',',' ').split()
         pairs = [] if pairs == [''] else pairs
 
