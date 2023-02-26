@@ -8,3 +8,4 @@ requests
 seaborn
 streamlit
 streamlit-aggrid
+streamlit-datalist

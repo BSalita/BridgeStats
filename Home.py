@@ -11,5 +11,5 @@ st.subheader("Statistics use only ACBL pair game data having hand records. No te
 st.subheader("Statistics use ACBL tournament pair results starting with 2015 and ACBL club pair results starting with 2019.")
 st.subheader("A Connection Error is usually due to a lack of memory on the server. Try either reloading the webpage immediately or come back later.")
 st.subheader("An Error 410 requires that you clear your browser's cache before proceeding.")
-st.caption("Project lead is Robert Salita research@AiPolice.org. Code written in Python and is currently not publically available. UI is written in Streamlit. Website is self-hosted using Ubuntu and Cloudflare Tunnel.")
+st.caption("Project lead is Robert Salita research@AiPolice.org. Code written in Python and is currently not publically available. UI is written in Streamlit. Database is SQLite and parquet. Query engine is Duckdb. Website is self-hosted using Ubuntu and Cloudflare Tunnel.")
 #st.sidebar.header("Home")
