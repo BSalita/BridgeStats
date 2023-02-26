@@ -81,7 +81,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     if club_or_tournament == 'club':
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
         #clubs = st.sidebar.selectbox('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all):', options=['','108571','267096'], key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number.')
-        clubs = st.sidebar.text_input('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all):', placeholder='Enter club numbers', key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number.  Examples: 108571  267096')
+        clubs = st.sidebar.text_input('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all). Examples: 2663279_9524304  6941303_6951346', placeholder='Enter club numbers', key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number. Examples: 108571  267096')
         clubs = clubs.replace(',', ' ').replace('_', ' ').split()
         clubs = [] if clubs == [''] else clubs
 
@@ -96,7 +96,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         # 2663279 (Robert Salita), 2454602 (Kerry Flom), 6811434 (Mark Itabishi?), 1709925 (Neil Silverman) 2997630 (Bella Ionis-Sorren), 4464109 (Curley Anderson)
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
         #players = st.sidebar.selectbox('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all):', options=['','2663279'], key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number.')
-        players = st.sidebar.text_input('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all):', placeholder='Enter player numbers', key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number.  Examples: 2663279 9524304 6941303 6951346')
+        players = st.sidebar.text_input('Player ACBL Numbers - Restrict results to these 7 digit ACBL player numbers (empty means all). Examples: 2663279 9524304 6941303 6951346', placeholder='Enter player numbers', key=key_prefix+'-Players',help='Enter zero or more ACBL player numbers. Use Player Lookup, in above list, to find a player number. Examples: 2663279 9524304 6941303 6951346')
         players = players.replace(',',' ').replace('_',' ').split()
         players = [] if players == [''] else players
 
