@@ -81,7 +81,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     if club_or_tournament == 'club':
         # streamlit bug? Must use non-empty value else preserves state between page loads when no 'key' is used.
         #clubs = st.sidebar.selectbox('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all):', options=['','108571','267096'], key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number.')
-        clubs = st.sidebar.text_input('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all). Examples: 2663279_9524304  6941303_6951346', placeholder='Enter club numbers', key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number. Examples: 108571  267096')
+        clubs = st.sidebar.text_input('Club ACBL Numbers - Restrict results to these 6 digit ACBL club numbers (empty means all). Examples: 108571  267096', placeholder='Enter club numbers', key=key_prefix+'-Clubs',help='Enter zero or more ACBL club numbers. Use Club Lookup, in above list, to find a club number. Examples: 108571  267096')
         clubs = clubs.replace(',', ' ').replace('_', ' ').split()
         clubs = [] if clubs == [''] else clubs
 
