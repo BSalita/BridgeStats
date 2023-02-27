@@ -278,7 +278,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         end_time = time.time()
         st.info(f"Data columns completed in {round(end_time-start_time,2)} seconds. Database has {board_results_len} rows. {selected_df_len} rows selected and aggregated.")
 
-    table, chart = st.tabs(["Data Table", "Chart"])
+    table, chart = st.tabs(['Data Tables', 'Charts'])
 
     with table:
 
