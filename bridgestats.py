@@ -326,7 +326,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                     st.info(f"Comparison of results of identical boards played by {pair_or_player}s. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by Date, Session, HandRecordBoard, Declarer_Name.")
                     streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Player1','Player2']),ngroup_name=ngroup_name,round=2)
 
-                    st.info(f"Comparison of results of boards played by {pair_or_player}s aggregated per session. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by {sort_column}.")
+                    st.info(f"Comparison of results of identical boards played by {pair_or_player}s aggregated per session. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by {sort_column}.")
                     # todo: use Player1,N,E not Declarer/Declarer_Name
                     table_df = table_df.groupby('Declarer').agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}) #.reset_index()
                     if sort_column in table_df:
@@ -372,7 +372,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             start_time = time.time()
 
             # using st.write because it displays in a suitable font size and style.
-            st.write(f"Acronyms: BidLvl is Contract Level, BidSuit is Contract Suit, ContractType is Type of Contract (passed-out, partial, game, small slam, grand slam,, Dbl is Doubled, MP is Player's Master Points Pct is Match Point Percent")
+            st.write(f"Acronyms: BidLvl is Contract Level, BidSuit is Contract Suit, ContractType is Type of Contract (passed-out, partial, game, small slam, grand slam), Dbl is Doubled, MP is Player's Master Points Pct is Match Point Percent")
 
             # removed feature because of annoying issue with new query of using groupby list but no special_columns translation.
             # declarer_groups = selected_df.groupby(groupby).groups
