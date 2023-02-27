@@ -198,7 +198,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     selected_charts = st.sidebar.multiselect('Select charts to display', chart_options, default=chart_options, key=key_prefix+'-Charts')
 
     special_columns_unaggregated = {
-        "Declarer_DD_GE":(True, "CASE WHEN Declarer_DD_Tricks >= Tricks THEN 1 ELSE 0 END","Declarer_DD_GE"),
+        "Declarer_DD_GE":(True, "CASE WHEN Tricks >= Declarer_DD_Tricks THEN 1 ELSE 0 END","Declarer_DD_GE"),
         "Declarer_ParScore_GE":(True, "CASE WHEN Declarer_Score >= Declarer_ParScore THEN 1 ELSE 0 END","Declarer_ParScore_GE"),
         "OverTricks":(True, "CASE WHEN Result > 0 THEN 1 ELSE 0 END","OverTricks"),
         "JustMade":(True, "CASE WHEN Result = 0 THEN 1 ELSE 0 END","JustMade"),
