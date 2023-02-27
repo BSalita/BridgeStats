@@ -247,7 +247,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         #selected_df.insert(selected_df.columns.get_loc('Declarer')+1,'Declarer_Name',selected_df['Declarer'].map(acbl_player_d))
         #selected_df.insert(selected_df.columns.get_loc('Dummy')+1,'Dummy_Name',selected_df['Dummy'].map(acbl_player_d))
         if selected_df_len == 0:
-            st.warning('No rows selected')
+            st.warning('No rows selected. Make sure left sidebar filters are correctly set.')
             st.stop()
         end_time = time.time()
         st.info(f"Query completed in {round(end_time-start_time,2)} seconds. Database has {board_results_len} rows. {selected_df_len} rows selected and aggregated.")
