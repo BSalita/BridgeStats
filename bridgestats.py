@@ -137,10 +137,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # stat_column becomes the sort_column
     sort_column = stat_column.strip()
 
-    if groupby[0] == 'Session':
-        min_declares = st.sidebar.number_input('Enter minimum number of times a player must have declared (default 6):',  value=6, min_value=0, key=key_prefix+'-Declares-Min')
-    else:
-        min_declares = st.sidebar.number_input('Enter minimum number of times a player must have declared (default 30):',  value=30, min_value=0, key=key_prefix+'-Declares-Min')
+    minimum_declares = 0 if len(players) or len(pairs) else 6 if groupby[0] == 'Session' else 30
+    min_declares = st.sidebar.number_input(f"Enter minimum number of times a player must have declared (default {minimum_declares}):",  value=minimum_declares, min_value=0, key=key_prefix+'-Declares-Min')
     
     top_ranked = st.sidebar.number_input('Enter number of top ranked results to show (default 100):', value=100, min_value=10, key=key_prefix+'-Declares-Top-Rank') # depends on stat_column?
 
