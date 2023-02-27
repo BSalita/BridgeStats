@@ -304,7 +304,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
                 table_df = declarer_grouped.agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options})
                 st.info(f"Means of boards played aggregated per player. Sorted by {sort_column}.")
-                streamlitlib.ShowDataFrameTable(table_df,round=2)
+                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),round=2)
 
                 table_df = selected_df.groupby('Session').agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}).reset_index()
                 st.info(f"Means of boards played by {pair_or_player}s aggregated per session. Sorted by {sort_column}.")
