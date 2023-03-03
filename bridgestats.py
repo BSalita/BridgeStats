@@ -27,7 +27,7 @@ def create_query(database_name, groupby, having, limit, columns, clubs, players,
     # issue is ordering of player numbers within Declarer_Pair. Better to use CONCAT(), swap players within pairs thus doubling, or always have Declarer_Pair sorted in db breaking NS,EW ordering?
     query_where_pairs = '' if len(
         pairs) == 0 else f"CONCAT(Declarer,'_',Dummy) IN ('"+"','".join(pairs)+"') OR CONCAT(Dummy,'_',Declarer) IN ('"+"','".join(pairs)+"')" # OR Defender_Pair IN ('"+"','".join(pairs)+"')"
-    query_where_mps = f"Declarer_MP BETWEEN {minimum_mps} AND {maximum_mps}"
+    query_where_mps = '' #f"Declarer_MP BETWEEN {minimum_mps} AND {maximum_mps}"
     query_where_dates = f"Date BETWEEN '{start_date}' AND '{end_date}'"
     query_where_string = ' AND '.join(s for s in [
                                       query_where_clubs, query_where_players, query_where_pairs, query_where_mps, query_where_dates] if len(s))
@@ -131,7 +131,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     # todo: possible to use chart_options?
     # listing most likely columns to want sorted. not sure what the case is for others.
-    sort_options = ['Declarer_Pct','Declarer_DD_GE','Declarer_ParScore_GE','Declarer_Tricks_DD_Diff','Declarer_ParScore_DD_Diff','Declarer_Score_DD_Diff','OverTricks','JustMade','UnderTricks','Declarer_MP']
+    sort_options = ['Declarer_Pct','Declarer_DD_GE','Declarer_ParScore_GE','Declarer_Tricks_DD_Diff','Declarer_ParScore_DD_Diff','Declarer_Score_DD_Diff','OverTricks','JustMade','UnderTricks'] #,'Declarer_MP']
+    sort_options += ['Declarer_SD_Score','Declarer_SD_Score_Max','Declarer_SD_Score_Diff','Declarer_SD_Score_Max_Diff'] # can't get mean of contracts but can do value_counts() (not implemented).
     stat_column = st.sidebar.selectbox('Sort table by:',options=sort_options+['Count'],key=key_prefix+'-Stat',help='Choose statistic to use as primary sort') # use ['Date']+ if player or pair is specified?
 
     # stat_column becomes the sort_column
@@ -148,11 +149,13 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     end_date = st.sidebar.text_input('Enter end date:', value=end_date_default, key=key_prefix+'-End_Date', help='Enter ending date in YYYY-MM-DD format.')
 
     minimum_mps_value = 0 if len(players) or len(pairs) else 300
-    minimum_mps = st.sidebar.number_input('Enter pair minimum master points (default is 0):', value=minimum_mps_value, min_value=0, key=key_prefix+'-MP-Min')
+    #minimum_mps = st.sidebar.number_input('Enter pair minimum master points (default is 0):', value=minimum_mps_value, min_value=0, key=key_prefix+'-MP-Min')
+    minimum_mps = minimum_mps_value
 
     # todo: make 9999999 into a variable.
-    maximum_mps = st.sidebar.number_input('Enter maximum master points (default is 9999999):', value=9999999, max_value=9999999, key=key_prefix+'-MP_Max')
-
+    #maximum_mps = st.sidebar.number_input('Enter maximum master points (default is 9999999):', value=9999999, max_value=9999999, key=key_prefix+'-MP_Max')
+    maximum_mps = 9999999
+    
     st.warning('Table and charts take from a few seconds to 120 seconds to render. Please be patient. Wait for the man in the upper-right corner to stop running ... Initial load is slowest.')
 
     with st.spinner(text="Reading board result data ..."):
@@ -164,6 +167,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             board_results_arrow = bridgestatslib.load_tournament_board_results(acbl_board_results_augmented_file)
         board_results_len = board_results_arrow.num_rows
         database_column_names = board_results_arrow.column_names
+        #st.write(database_column_names)
         end_time = time.time()
         st.info(f"Data read completed in {round(end_time-start_time,2)} seconds. {board_results_len} rows read.")
 
@@ -216,9 +220,14 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         "OverTricks":special_columns_unaggregated["OverTricks"][1],
         "JustMade":special_columns_unaggregated["JustMade"][1],
         "UnderTricks":special_columns_unaggregated["UnderTricks"][1],
+        "Declarer_SD_Score":"Declarer_SD_Score",
+        "Declarer_SD_Score_Max":"Declarer_SD_Score_Max",
+        "Declarer_SD_Contract_Max":"Declarer_SD_Contract_Max",
         "Declarer_Tricks_DD_Diff":"Declarer_Tricks_DD_Diff",
         "Declarer_Score_DD_Diff":"Declarer_Score_DD_Diff",
         "Declarer_ParScore_DD_Diff":"Declarer_ParScore_DD_Diff",
+        "Declarer_SD_Score_Diff":"Declarer_SD_Score_Diff",
+        "Declarer_SD_Score_Max_Diff":"Declarer_SD_Score_Max_Diff",
         #"Table":"'Table'", # todo: Table is reserved word in SQL. What to do?
         #"LoTT":"LoTT",
         }
@@ -229,7 +238,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # todo: implement MatchP, Lead, 'Pct', 'Table', 'Score' vs 'Score_NS', 'Round', 'MP_NS', 'MP_EW', LoTT?
     board_scoring_columns = ['Defender_Pair', 'Board', 'Result', 'BidLvl', 'BidSuit', 'Dbl', 'NSEW', 'Tricks', 'ContractType', 'Par_Score']
     directional_columns = ['NNum', 'ENum', 'SNum', 'WNum']
-    master_point_columns = ['Declarer_MP', 'MP_N', 'MP_S', 'MP_E', 'MP_W']
+    master_point_columns = [] # ['Declarer_MP', 'MP_N', 'MP_S', 'MP_E', 'MP_W']
     for col in board_scoring_columns+directional_columns+master_point_columns:
         mandatory_columns_unaggregated[col] = col
     # make all chart_options mandatory
