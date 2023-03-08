@@ -56,6 +56,7 @@ selected_df['mp_total'] = selected_df['mp_total'].astype('float64') # seems like
 selected_df = selected_df if len(clubs_regex)==0 else selected_df[selected_df['club'].astype('string').str.contains(clubs_regex,regex=True)]
 selected_df = selected_df if len(player_numbers_regex)==0 else selected_df[selected_df['acbl_number'].astype('string').str.contains(player_numbers_regex,regex=True)]
 selected_df = selected_df if len(player_names_regex)==0 else selected_df[selected_df['last_name'].str.contains(player_names_regex,case=False,regex=True)]
+selected_df = selected_df.drop(selected_df.filter(regex=r'mp_').columns,axis='columns') # drop master point columns per ACBL privacy requirements
 
 table, charts = st.tabs(["Data Table", "Charts"])
 
