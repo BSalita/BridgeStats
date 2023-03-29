@@ -22,11 +22,10 @@ def create_query(database_name, groupby, having, limit, columns, clubs, players,
     query_select = f"SELECT {columns}"
     query_from = f"FROM {database_name}"
     query_where_clubs = '' if len(clubs) == 0 else f"Club IN ({','.join(clubs)})"
-    query_where_players = '' if len(
-        players) == 0 else f"Declarer IN ({','.join(players)})" # f"NNum IN ({','.join(players)}) OR ENum IN ({','.join(players)}) OR SNum IN ({','.join(players)}) OR WNum IN ({','.join(players)})"
+    #query_where_players = '' if len(players) == 0 else f"Declarer IN ({','.join(players)})" # f"NNum IN ({','.join(players)}) OR ENum IN ({','.join(players)}) OR SNum IN ({','.join(players)}) OR WNum IN ({','.join(players)})"
+    query_where_players = '' if len(players) == 0 else f"NNum IN ({','.join(players)}) OR ENum IN ({','.join(players)}) OR SNum IN ({','.join(players)}) OR WNum IN ({','.join(players)})"
     # issue is ordering of player numbers within Declarer_Pair. Better to use CONCAT(), swap players within pairs thus doubling, or always have Declarer_Pair sorted in db breaking NS,EW ordering?
-    query_where_pairs = '' if len(
-        pairs) == 0 else f"CONCAT(Declarer,'_',Dummy) IN ('"+"','".join(pairs)+"') OR CONCAT(Dummy,'_',Declarer) IN ('"+"','".join(pairs)+"')" # OR Defender_Pair IN ('"+"','".join(pairs)+"')"
+    query_where_pairs = '' if len(pairs) == 0 else f"CONCAT(Declarer,'_',Dummy) IN ('"+"','".join(pairs)+"') OR CONCAT(Dummy,'_',Declarer) IN ('"+"','".join(pairs)+"')" # OR Defender_Pair IN ('"+"','".join(pairs)+"')"
     query_where_mps = '' #f"Declarer_MP BETWEEN {minimum_mps} AND {maximum_mps}"
     query_where_dates = f"Date BETWEEN '{start_date}' AND '{end_date}'"
     query_where_string = ' AND '.join(s for s in [
@@ -125,14 +124,19 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                 if player not in acbl_player_d:
                     st.warning(f"Player {player} is unknown. Remove from list.")
                     st.stop()
+                if player not in players:
+                    players.append(player)
         # to rewrite pairs in sorted order: pairs = ['_'.join(sorted(pair.split('_'))) for pair in pairs]
     else:
         pairs = []
 
     # todo: possible to use chart_options?
     # listing most likely columns to want sorted. not sure what the case is for others.
-    sort_options = ['Declarer_Pct','Declarer_DD_GE','Declarer_ParScore_GE','Declarer_Tricks_DD_Diff','Declarer_ParScore_DD_Diff','Declarer_Score_DD_Diff','OverTricks','JustMade','UnderTricks'] #,'Declarer_MP']
-    sort_options += ['Declarer_SD_Score','Declarer_SD_Score_Max','Declarer_SD_Score_Diff','Declarer_SD_Score_Max_Diff'] # can't get mean of contracts but can do value_counts() (not implemented).
+    sort_options = ['Declarer_Pct']
+    sort_options += ['Declarer_Score','Declarer_DD_Score','Declarer_ParScore','Declarer_SD_Score','Declarer_SD_Score_Max']
+    sort_options += ['Declarer_DD_GE','Declarer_ParScore_GE','Declarer_Tricks_DD_Diff','Declarer_ParScore_DD_Diff','Declarer_Score_DD_Diff','OverTricks','JustMade','UnderTricks'] #,'Declarer_MP']
+    sort_options += ['Declarer_SD_Score_Diff','Declarer_SD_Score_Max_Diff']
+    sort_options += ['Declarer_ParScore_Pct','Declarer_SD_Pct','Declarer_SD_Pct_Max','Declarer_SD_Pct_Diff','Declarer_SD_Pct_Max_Diff','Declarer_SD_ParScore_Pct_Diff','Declarer_SD_ParScore_Pct_Max_Diff'] # can't get mean of contracts but can do value_counts() (not implemented).
     stat_column = st.sidebar.selectbox('Sort table by:',options=sort_options+['Count'],key=key_prefix+'-Stat',help='Choose statistic to use as primary sort') # use ['Date']+ if player or pair is specified?
 
     # stat_column becomes the sort_column
@@ -206,6 +210,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         "JustMade":(True, "CASE WHEN Result = 0 THEN 1 ELSE 0 END","JustMade"),
         "UnderTricks":(True, "CASE WHEN Result < 0 THEN 1 ELSE 0 END","UnderTricks"),
         }
+    
+    # todo: looks like there's a bug where columns in mandatory_columns_unaggregated won't show unless they're also in sort_options.
     mandatory_columns_unaggregated = {
         "Date":"Date",
         "Session":"Session",
@@ -214,20 +220,31 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         "Declarer":"Declarer",
         "Declarer_Name":"Declarer_Name",
         "Dummy":"Dummy",
+        "Declarer_Score":"Declarer_Score",
+        "Declarer_Vul":"Declarer_Vul",
+        "Declarer_DD_Score":"Declarer_DD_Score",
+        "Declarer_ParScore":"Declarer_ParScore",
+        "Declarer_SD_Score":"Declarer_SD_Score",
+        "Declarer_SD_Score_Max":"Declarer_SD_Score_Max",
         "Declarer_Pct":"Declarer_Pct",
         "Declarer_DD_GE":special_columns_unaggregated["Declarer_DD_GE"][1],
         "Declarer_ParScore_GE":special_columns_unaggregated["Declarer_ParScore_GE"][1],
         "OverTricks":special_columns_unaggregated["OverTricks"][1],
         "JustMade":special_columns_unaggregated["JustMade"][1],
         "UnderTricks":special_columns_unaggregated["UnderTricks"][1],
-        "Declarer_SD_Score":"Declarer_SD_Score",
-        "Declarer_SD_Score_Max":"Declarer_SD_Score_Max",
         "Declarer_SD_Contract_Max":"Declarer_SD_Contract_Max",
         "Declarer_Tricks_DD_Diff":"Declarer_Tricks_DD_Diff",
         "Declarer_Score_DD_Diff":"Declarer_Score_DD_Diff",
         "Declarer_ParScore_DD_Diff":"Declarer_ParScore_DD_Diff",
         "Declarer_SD_Score_Diff":"Declarer_SD_Score_Diff",
         "Declarer_SD_Score_Max_Diff":"Declarer_SD_Score_Max_Diff",
+        "Declarer_ParScore_Pct":"Declarer_ParScore_Pct",
+        "Declarer_SD_Pct":"Declarer_SD_Pct",
+        "Declarer_SD_Pct_Max":"Declarer_SD_Pct_Max",
+        "Declarer_SD_Pct_Diff":"Declarer_SD_Pct_Diff",
+        "Declarer_SD_Pct_Max_Diff":"Declarer_SD_Pct_Max_Diff",
+        "Declarer_SD_ParScore_Pct_Diff":"Declarer_SD_ParScore_Pct_Diff",
+        "Declarer_SD_ParScore_Pct_Max_Diff":"Declarer_SD_ParScore_Pct_Max_Diff",
         #"Table":"'Table'", # todo: Table is reserved word in SQL. What to do?
         #"LoTT":"LoTT",
         }
@@ -236,10 +253,11 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     # There's many unused columns. See above lists.
     # todo: implement MatchP, Lead, 'Pct', 'Table', 'Score' vs 'Score_NS', 'Round', 'MP_NS', 'MP_EW', LoTT?
-    board_scoring_columns = ['Defender_Pair', 'Board', 'Result', 'BidLvl', 'BidSuit', 'Dbl', 'NSEW', 'Tricks', 'ContractType', 'Par_Score']
+    board_scoring_columns = ['Defender_Pair', 'Board', 'Result', 'BidLvl', 'BidSuit', 'Dbl', 'NSEW', 'Vul','Tricks', 'ContractType', 'Par_Score']
     directional_columns = ['NNum', 'ENum', 'SNum', 'WNum']
+    positional_columns = ['Declarer','OnLead','Dummy','NotOnLead']
     master_point_columns = [] # ['Declarer_MP', 'MP_N', 'MP_S', 'MP_E', 'MP_W']
-    for col in board_scoring_columns+directional_columns+master_point_columns:
+    for col in board_scoring_columns+directional_columns+positional_columns+master_point_columns:
         mandatory_columns_unaggregated[col] = col
     # make all chart_options mandatory
     for k,v in special_columns_unaggregated.items():
@@ -251,7 +269,13 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     with st.spinner(text="Selecting database rows ..."):
         start_time = time.time()
         query = st.text_input('Sql query', value=query,label_visibility='hidden', key=key_prefix+'-query') # either use initial query or let user change query
-        selected_df = bridgestatslib.duckdb_arrow_to_df(board_results_arrow, query) # quickly returns the pre-refresh selected_df from cache so keep it virgin-ish. Always use '...' not in selected_df to avoid re-modifing.
+        any_position = bridgestatslib.duckdb_arrow_to_df(board_results_arrow, query) # quickly returns the pre-refresh selected_df from cache so keep it virgin-ish. Always use '...' not in selected_df to avoid re-modifing.
+        if len(players):
+            selected_df = any_position[any_position['Declarer'].isin(players)]
+        #elif len(pairs)
+        #    selected_df = any_position[any_position['Declarer'].isin(pairs)]
+        else:
+            selected_df = any_position # position not implemented for pairs
         selected_df_len = len(selected_df)
         #selected_df.insert(selected_df.columns.get_loc('Declarer')+1,'Declarer_Name',selected_df['Declarer'].map(acbl_player_d))
         #selected_df.insert(selected_df.columns.get_loc('Dummy')+1,'Dummy_Name',selected_df['Dummy'].map(acbl_player_d))
@@ -293,12 +317,44 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
             start_time = time.time()
 
-            df = grouped.agg({'Date':'first','Declarer_Pair':'first','Count':'count','Player1':'last','Player2':'last','Players':'last'}|{col:'mean' for col in sort_options}).reset_index()
+            # todo: do this when no players (all)?
+            # todo: create 2nd table by pairs
+            if len(players):
+                d = {}
+                cols = ['Player','Player_Name','Count','N','E','S','W','N_Pct','E_Pct','S_Pct','W_Pct','Declarer','OnLead','Dummy','NotOnLead','Declarer_Pct','OnLead_Pct','Dummy_Pct','NotOnLead_Pct']
+                for col in cols:
+                    d[col] = []
+                for player in players:
+                    d['Player'].append(player)
+                    player_df = any_position[any_position['Declarer'].eq(player)]
+                    d['Player_Name'].append(player_df['Declarer_Name'].iloc[-1])
+                    pos_total = 0
+                    for pos in ['Declarer','OnLead','Dummy','NotOnLead']:
+                        pos_sum = any_position[pos].eq(player).sum()
+                        d[pos].append(pos_sum)
+                        pos_total += pos_sum
+                    for pos in ['Declarer','OnLead','Dummy','NotOnLead']:
+                        d[pos+'_Pct'].append(d[pos][-1]/pos_total)
+                    direction_total = 0
+                    for direction in ['NNum','ENum','SNum','WNum']:
+                        direction_sum = any_position[direction].eq(player).sum()
+                        d[direction[0]].append(direction_sum)
+                        direction_total += direction_sum
+                    for direction in ['NNum','ENum','SNum','WNum']:
+                        d[direction[0]+'_Pct'].append(d[direction[0]][-1]/direction_total)
+                    assert pos_total == direction_total
+                    d['Count'].append(pos_total)
+                st.info(f"Frequency of Player Positions")
+                df = pd.DataFrame(d)
+                streamlitlib.ShowDataFrameTable(df,round=2) #.sort_values(sort_column,ascending=False))
+
 
             if len(players) == 0 and len(pairs) == 0:
+                #df = grouped.agg({'Date':'first','Declarer_Pair':'first','Count':'count','Player1':'last','Player2':'last','Players':'last'}|{col:'mean' for col in sort_options}).reset_index()
+                df = grouped.agg({'Date':'first','Declarer':'first','Declarer_Name':'first','Count':'count','Player1':'last','Player2':'last'}|{col:'mean' for col in sort_options})#.reset_index()
                 table_df = df[df['Count'].ge(min_declares)].nlargest(top_ranked,sort_column)
                 st.info(f"Table of {selected_df_len} rows sorted by {sort_column}. Top performing {len(table_df)} {pair_or_player}s shown.")
-                streamlitlib.ShowDataFrameTable(table_df,round=2) #.sort_values(stat_column,ascending=False))
+                streamlitlib.ShowDataFrameTable(table_df,color_column=sort_column,round=2) #.sort_values(sort_column,ascending=False))
                 del table_df
 
             else:
@@ -309,15 +365,15 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                 for k,player_indexes in declarer_grouped.groups.items():
                     player_df = selected_df.loc[player_indexes]
                     st.info(f"Boards played by {player_df['Declarer_Name'].iloc[-1]}. Sorted by {sort_column}. {len(player_df)} boards found.")
-                    streamlitlib.ShowDataFrameTable(player_df.sort_values(sort_column,ascending=False),round=2)
+                    streamlitlib.ShowDataFrameTable(player_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
 
                 table_df = declarer_grouped.agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options})
                 st.info(f"Means of boards played aggregated per player. Sorted by {sort_column}.")
-                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),round=2)
+                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
 
                 table_df = selected_df.groupby('Session').agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}).reset_index()
                 st.info(f"Means of boards played by {pair_or_player}s aggregated per session. Sorted by {sort_column}.")
-                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),round=2)
+                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
 
                 del table_df
 
@@ -331,7 +387,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                     # todo: use this? table_df[ngroup_name] = table_df.groupby(['Date','board_record_string']).ngroup()
                     table_df[ngroup_name] = table_df.groupby(['Date','Session','HandRecordBoard']).ngroup()
                     st.info(f"Comparison of results of identical boards played by {pair_or_player}s. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by Date, Session, HandRecordBoard, Declarer_Name.")
-                    streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Player1','Player2']),ngroup_name=ngroup_name,round=2)
+                    streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Player1','Player2']),color_column=sort_column,ngroup_name=ngroup_name,round=2)
 
                     st.info(f"Comparison of results of identical boards played by {pair_or_player}s aggregated per session. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by {sort_column}.")
                     # todo: use Player1,N,E not Declarer/Declarer_Name
@@ -340,7 +396,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                         table_df.sort_values(sort_column,ascending=False,inplace=True)
                     else:
                         table_df.sort_values(['Player1','Player2'],ascending=True,inplace=True)
-                    streamlitlib.ShowDataFrameTable(table_df,round=2)
+                    streamlitlib.ShowDataFrameTable(table_df,color_column=sort_column,round=2)
 
                     if pair_or_player == 'pair': # head-to-head comparison of identical boards played between pairs.
                         hrb_grouped = selected_df.groupby('HandRecordBoard')
@@ -364,7 +420,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                             ngroup_name = 'ngroup'
                             table_df[ngroup_name] = table_df.groupby('H2H_sorted').ngroup()
                             st.info(f"Comparison of head-to-head results of identical boards played between pairs aggregated per boards. Sorted by Declarer_Name.")
-                            streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Declarer_Name']),ngroup_name=ngroup_name,round=2)
+                            streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Declarer_Name']),color_column=sort_column,ngroup_name=ngroup_name,round=2)
 
                     del table_df
 
@@ -390,6 +446,9 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             # else:
             #    selected_df = selected_df.sample(1000)
             bridgestatslib.ShowCharts(selected_df,selected_charts,stat_column)
+
+            bridgestatslib.ShowCharts(selected_df.filter(regex='(Pct|Pct_Max)$'),[','.join(selected_df.filter(regex='(Pct|Pct_Max)$'))]) # temp - put into selected_charts
+            bridgestatslib.ShowCharts(selected_df.filter(regex='Pct.*Diff'),[','.join(selected_df.filter(regex='Pct.*Diff'))]) # temp - put into selected_charts
 
             end_time = time.time()
             st.info(f"Charts created in {round(end_time-start_time,2)} seconds.")

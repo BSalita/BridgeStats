@@ -103,7 +103,8 @@ def CreateCheckBoxesFromColumns(column_names,mandatory_columns,special_columns,s
     return columns
 
 
-def ShowCharts(selected_df,selected_charts,stat_column=None):
+# todo: remove stat_column in favor of column_filter?
+def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
 
     available_charts = []
     for chart in selected_charts:
@@ -138,7 +139,10 @@ def ShowCharts(selected_df,selected_charts,stat_column=None):
                 title = f"Frequency Percentage of {', '.join(stat_column_split)} {', '.join(players_d.keys())}"
                 ax = pd.DataFrame(players_d).plot(kind='bar',figsize=figsize,title=title)
                 ax.legend(title='(Player Number, Player Name, Rows Found, Mean)')
-                st.pyplot(plt,clear_figure=True)
+            else:
+                # ax = selected_df.filter(regex=column_filter).hist(figsize=figsize)
+                ax = selected_df[stat_column_split].hist(figsize=figsize)
+            st.pyplot(plt,clear_figure=True) # todo: remove plt
             
     else:
     

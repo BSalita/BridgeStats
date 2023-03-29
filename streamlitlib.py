@@ -87,7 +87,7 @@ def plot_heatmap(cross_table, fmt='.2f', xlabel=None, ylabel=None, zlabel=None, 
     st.pyplot(plt,clear_figure=True)
 
 
-def ShowDataFrameTable(table_df,output_method='aggrid',ngroup_name=None,round=2):
+def ShowDataFrameTable(table_df,output_method='aggrid',color_column=None,ngroup_name=None,round=2):
 
     if output_method == 'table':
         st.table(table_df.style.format({col:'{:,.2f}' for col in table_df.select_dtypes('float')}).set_table_styles(style_table())) #,1600,500)
@@ -106,8 +106,10 @@ def ShowDataFrameTable(table_df,output_method='aggrid',ngroup_name=None,round=2)
         gb.configure_default_column(cellStyle={'color': 'black', 'font-size': '12px'}, suppressMenu=True, wrapHeaderText=True, autoHeaderHeight=True)
         custom_css = {".ag-header-cell-text": {"font-size": "12px", 'text-overflow': 'revert;', 'font-weight': 700},
           ".ag-theme-streamlit": {'transform': "scale(0.8)", "transform-origin": '0 0'}}
+        if color_column is not None:
+            gb.configure_column(color_column, cellStyle={'color': 'black', 'background-color': 'WhiteSmoke'}) # must be executed before build()
         gridOptions = gb.build()
-        # ngroup_name is the name of a column which contains the same value for every members of a group. Used to alternate colors.
+        # ngroup_name is the name of a column which contains the same value for every member of a group. Used to alternate colors.
         if ngroup_name is not None:
             jscode = """
                 function(params) {
