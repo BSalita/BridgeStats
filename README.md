@@ -20,8 +20,8 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 
 ## Related Projects
 - https://github.com/dds-bridge/dds
-- https://github.com/dominicprice/endplay
 - https://github.com/anntzer/redeal
+- https://github.com/dominicprice/endplay
 - https://github.com/liu1000/bidly
 - https://github.com/jdh8/bml
 - https://github.com/gpaulissen/bml
