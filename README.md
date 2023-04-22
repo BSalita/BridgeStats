@@ -20,11 +20,14 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 
 ## Related Projects
 - https://github.com/dds-bridge/dds
-- https://github.com/gpaulissen/bml and https://github.com/gpaulissen/bridge-systems and https://github.com/jdh8/bml
-- https://github.com/gpaulissen/bridge-systems
 - https://github.com/dominicprice/endplay
 - https://github.com/anntzer/redeal
 - https://github.com/liu1000/bidly
+- https://github.com/jdh8/bml
+- https://github.com/gpaulissen/bml
+- https://github.com/gpaulissen/bridge-systems
+- https://github.com/Kungsgeten/bml
+- https://github.com/gpaulissen/bridge-systems
 - https://github.com/kdblocher/bridge
 - https://github.com/ContractBridge/pbn-files
 - https://github.com/jfklorenz/Bridge-Package
@@ -32,7 +35,6 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 - https://github.com/jfklorenz/Bridge-Scoring-Package
 - https://github.com/kdblocher/bridge
 - https://github.com/ContractBridge/pbnj
-- https://github.com/Kungsgeten/bml
 - https://github.com/oriyanh/Bridge-AI
 - https://github.com/zek/Bridge-Game
 - https://github.com/andrewimcclement/practice_bidding
