@@ -22,7 +22,6 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 - https://github.com/BSalita/BBO-Downloader
 - https://github.com/BSalita/BBO-Lin-Parser
 - https://github.com/dds-bridge/dds
-- https://github.com/dds-bridge/dds
 - https://github.com/anntzer/redeal
 - https://github.com/dominicprice/endplay
 - https://github.com/lorserker/ben
