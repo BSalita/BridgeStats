@@ -42,8 +42,11 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 - https://github.com/zek/Bridge-Game
 - https://github.com/andrewimcclement/practice_bidding
 - https://github.com/jasujm/bridge
+- https://sourceforge.net/projects/bidbase/files/CardShark%20BidBase%20Bidding%20Practice%20Program/
 
 ## Related Documents
 - https://www.tistis.nl/pbn/
 - https://github.com/jfklorenz/Bridge-Documents
 - http://home.claranet.nl/users/veugent/pbn/pbn_v20.txt
+- https://www.jeff-goldsmith.com/bridge/glossary.html
+- https://en.wikipedia.org/wiki/Glossary_of_contract_bridge_terms
