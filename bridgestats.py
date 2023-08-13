@@ -5,6 +5,7 @@
 # 3. looks like 2500 hrd contains 2500 hand records with superceded hand record ids. Dropping dups here, keeping latest. But this step should be done in hand_record_clean.
 # 4. Output chart label with names instead of Declarer_Pairs
 # 5. Due to rendering delays, limit charts to the 100 most frequent x labels.
+# 6. Implement column of total of HCP per session per direction. Analyse how players perform when they have more HCP, voids, etc.
 
 import streamlit as st
 import pathlib

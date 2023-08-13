@@ -5,6 +5,42 @@ import seaborn as sns
 from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode, ColumnsAutoSizeMode, AgGridTheme, JsCode
 
 
+def move_focus():
+    # inspect the html to determine which control to specify to receive focus (e.g. text or textarea).
+    st.components.v1.html(
+        f"""
+            <script>
+                var textarea = window.parent.document.querySelectorAll("textarea[type=textarea]");
+                for (var i = 0; i < textarea.length; ++i) {{
+                    textarea[i].focus();
+                }}
+            </script>
+        """,
+    )
+
+
+def stick_it_good():
+
+    # make header sticky.
+    st.markdown(
+        """
+            <div class='fixed-header'/>
+            <style>
+                div[data-testid="stVerticalBlock"] div:has(div.fixed-header) {
+                    position: sticky;
+                    top: 2.875rem;
+                    background-color: white;
+                    z-index: 999;
+                }
+                .fixed-header {
+                    border-bottom: 0px solid black;
+                }
+            </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 def widen_scrollbars():
     st.markdown("""
                     <html>
