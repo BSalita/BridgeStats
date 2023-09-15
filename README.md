@@ -19,6 +19,7 @@ You can host the website locally and use cloudflare tunnels to forward streamlit
 Data is only available, from this project's author, for those who sign ACBL's NDA or register for ACBL's API. The data is primarily oriented for consumption by a machine learning model as opposed to human readability. The data is created by both scraping ACBL's website and using their APIs. The data creation process is extremely resource intensive and requires at least 128GB multi-core systems. Source code for building the data is not yet available.
 
 ## Related Projects
+- https://github.com/BSalita/Bridge_Game_Postmortem_Chatbot
 - https://github.com/BSalita/BBO-Downloader
 - https://github.com/BSalita/BBO-Lin-Parser
 - https://github.com/dds-bridge/dds
@@ -50,3 +51,5 @@ Data is only available, from this project's author, for those who sign ACBL's ND
 - http://home.claranet.nl/users/veugent/pbn/pbn_v20.txt
 - https://www.jeff-goldsmith.com/bridge/glossary.html
 - https://en.wikipedia.org/wiki/Glossary_of_contract_bridge_terms
+- https://markdown.land/markdown-cheat-sheet
+- https://www.color-hex.com/
