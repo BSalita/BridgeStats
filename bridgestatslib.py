@@ -10,7 +10,7 @@ import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
 import time
-import streamlitlib
+import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
 
 
 @st.cache_resource()

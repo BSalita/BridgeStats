@@ -11,7 +11,7 @@ import pandas as pd
 import altair as alt
 import time
 import bridgestatslib
-import streamlitlib
+import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
 
 
 #st.set_page_config(layout="wide", initial_sidebar_state="expanded")

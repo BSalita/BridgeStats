@@ -15,8 +15,23 @@ import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
 import time
-import streamlitlib
 import bridgestatslib
+import sys
+
+# todo: doesn't some variation of import chatlib.chatlib work instead of using sys.path.append such as exporting via __init__.py?
+#import acbllib.acbllib
+#import streamlitlib.streamlitlib
+#import chatlib.chatlib
+#import mlBridgeLib.mlBridgeLib
+sys.path.append(str(pathlib.Path.cwd().joinpath('acbllib')))  # global
+#sys.path.append(str(pathlib.Path.cwd().joinpath('chatlib')))  # global
+sys.path.append(str(pathlib.Path.cwd().joinpath('mlBridgeLib')))  # global
+sys.path.append(str(pathlib.Path.cwd().joinpath('streamlitlib')))  # global
+# streamlitlib, mlBridgeLib, chatlib must be placed after sys.path.append. vscode re-format likes to move them to the top
+import acbllib
+import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
+import mlBridgeLib # must be placed after sys.path.append. vscode re-format likes to move this to the top
+#import chatlib  # must be placed after sys.path.append. vscode re-format likes to move this to the top
 
 
 def create_query(database_name, groupby, having, limit, columns, clubs, players, pairs, min_declares, stat_column, minimum_mps, maximum_mps, start_date, end_date):
