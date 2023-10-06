@@ -11,6 +11,7 @@ import pandas as pd
 import altair as alt
 import time
 import bridgestatslib
+import sys
 sys.path.append(str(pathlib.Path.cwd().joinpath('streamlitlib')))  # global
 import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
 
