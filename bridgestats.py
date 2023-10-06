@@ -29,9 +29,9 @@ sys.path.append(str(pathlib.Path.cwd().joinpath('mlBridgeLib')))  # global
 sys.path.append(str(pathlib.Path.cwd().joinpath('streamlitlib')))  # global
 # streamlitlib, mlBridgeLib, chatlib must be placed after sys.path.append. vscode re-format likes to move them to the top
 import acbllib
-import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
-import mlBridgeLib # must be placed after sys.path.append. vscode re-format likes to move this to the top
 #import chatlib  # must be placed after sys.path.append. vscode re-format likes to move this to the top
+import mlBridgeLib # must be placed after sys.path.append. vscode re-format likes to move this to the top
+import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
 
 
 def create_query(database_name, groupby, having, limit, columns, clubs, players, pairs, min_declares, stat_column, minimum_mps, maximum_mps, start_date, end_date):
