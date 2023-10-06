@@ -196,7 +196,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # player id data: 'NNum', 'SNum', 'ENum', 'WNum', 'NName', 'SName', 'EName', 'WName', 'Declarer', 'OnLead', 'Dummy', 'NotOnLead', 'Declarer_Name', other names ...
     # Master point data: 'MP_N', 'MP_S', 'MP_E', 'MP_W', 'Declarer_MP', 'Dummy_MP', 'OnLead_MP', 'NotOnLead_MP', 'NS_Geo_MP', 'EW_Geo_MP', 'Declarer_Geo_MP', 'Defender_Geo_MP'
     # hand record board data: 'HandRecordBoard', 'Board', 'Dealer', 'Vul', 'Par_Score'
-    # contract data: 'contract', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer_Direction', 'ContractType'
+    # contract data: 'contract', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer', 'ContractType'
     # board result: 'Tricks', 'Result', 'match_points_NS', 'match_points_EW', 'Score_NS', 'Score_EW', 'Pct_NS', 'Pct_EW'
     # Declarer data: 'Declarer_Score', 'Declarer_ParScore', 'Declarer_Pct', 'Declarer_DD_Tricks', 'Declarer_DD_Score', 'Declarer_DD_Pct', 'Declarer_Tricks_DD_Diff', 'Declarer_Score_DD_Diff', 'Declarer_ParScore_DD_Diff'
     # Pair data: 'Declarer_Pair', 'Defender_Pair', 'pair_number_NS', 'pair_number_EW'
@@ -206,7 +206,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # 'HandRecordBoard', 'Board', 'Pair', 'NNum', 'NName', 'SNum', 'SName',
     # 'ENum', 'EName', 'WNum', 'WName', 'PairNS', 'PairEW', 'MP_N', 'MP_S',
     # 'MP_E', 'MP_W', 'MP_NS', 'MP_EW', 'Score', 'MatchP', 'Pct', 'NSPair',
-    # 'EWPair', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer_Direction', 'Tricks', 'Round',
+    # 'EWPair', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer', 'Tricks', 'Round',
     # 'Table', 'Lead', 'Result', 'Declarer', 'OnLead', 'Dummy', 'NotOnLead',
     # 'HandRecordBoardScore', 'ContractType', 'Dealer', 'Par_Score',
     # 'Declarer_MP', 'Dummy_MP', ' OnLead_MP', 'NotOnLead_MP', 'NS_Geo_MP',
@@ -269,7 +269,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
     # There's many unused columns. See above lists.
     # todo: implement MatchP, Lead, 'Pct', 'Table', 'Score' vs 'Score_NS', 'Round', 'MP_NS', 'MP_EW', LoTT?
-    board_scoring_columns = ['Defender_Pair', 'Board', 'Result', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer_Direction', 'Vul','Tricks', 'ContractType', 'Par_Score']
+    board_scoring_columns = ['Defender_Pair', 'Board', 'Result', 'BidLvl', 'BidSuit', 'Dbl', 'Declarer', 'Vul','Tricks', 'ContractType', 'Par_Score']
     directional_columns = ['NNum', 'ENum', 'SNum', 'WNum']
     positional_columns = ['Declarer','OnLead','Dummy','NotOnLead']
     master_point_columns = [] # ['Declarer_MP', 'MP_N', 'MP_S', 'MP_E', 'MP_W']
