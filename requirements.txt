@@ -6,6 +6,7 @@ pandas
 pyarrow
 requests
 seaborn
+sqlalchemy
 streamlit
 streamlit-aggrid
 streamlit-datalist
