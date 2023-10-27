@@ -354,7 +354,7 @@ def get_club_results_details_data(url):
         return None # todo: handle team events
         data = soup.find('team-result-details')['v-bind:data']
     else:
-        assert False, "Can't find data tag."
+        return None # "Can't find data tag."
     assert data is not None and isinstance(data,str) and len(data), [url, data]
 
     details_data = json.loads(data) # returns dict from json
@@ -397,10 +397,7 @@ def get_tournament_session_results(session_id, acbl_api_key):
     url = path+'?'+params
     print('tournament session url:',url)
     response = requests.get(url, headers=headers)
-    assert response.status_code == 200, [url, response.status_code]
-    json_response = response.json()
-    #json_pretty = json.dumps(json_response, indent=4)
-    return json_response
+    return response
 
 
 # get a list of tournament session results
@@ -442,7 +439,7 @@ def download_tournament_player_history(player_id, acbl_api_key):
             # next_page_url = None
             # sessions_total = 0
             break
-        assert response.status_code == 200, (url, response.status_code) # 401 is authorization error often because Persanal Access Token has expired.
+        assert response.status_code == 200, (url, response.status_code) # 401 is authorization error often because Personal Access Token has expired.
         json_response = response.json()
         #json_pretty = json.dumps(json_response, indent=4)
         #print(json_pretty)
@@ -495,7 +492,7 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
                 session_id = data['session_id']
                 filePath_sql = dirPath.joinpath(session_id+'.session.sql')
                 filePath_json = dirPath.joinpath(session_id+'.session.json')
-                if filePath_sql.exists(): # todo: and filePath_json.exists() and filePath_sql is newer than filePath_json
+                if filePath_sql.exists() and filePath_json.exists() and filePath_sql.stat().st_ctime > filePath_json.stat().st_ctime:
                     print(f'{sessions_count}/{sessions_total}: File exists: {filePath_sql}: skipping')
                     #if filePath_json.exists(): # json file is no longer needed?
                     #    print(f'Deleting JSON file: {filePath_json}')
@@ -504,8 +501,12 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
                 if filePath_json.exists():
                     print(f'{sessions_count}/{sessions_total}: File exists: {filePath_json}: skipping')
                     break # continue will skip file. break will move on to next player
-                print(f'{sessions_count}/{sessions_total}: Writing:',filePath_json)
+                response = get_tournament_session_results(session_id, acbl_api_key)
+                assert response.status_code == 200, response.status_code
+                session_json = response.json()
+                #json_pretty = json.dumps(json_response, indent=4)
+                print(f'{sessions_count}/{sessions_total}: Writing:{filePath_json} len:{len(session_json)}')
                 with open(filePath_json,'w',encoding='UTF8') as f:
-                    f.write(json.dumps(data, indent=4))
+                    f.write(json.dumps(session_json, indent=4))
         if sessions_count != sessions_total:
             print(f'Session count mismatch: {dirPath}: variance:{sessions_count-sessions_total}')

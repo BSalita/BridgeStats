@@ -353,6 +353,11 @@ def OHEToHandsL(ohel):
     return [tuple(tuple(([''.join([ranked_suit[denom] for denom in range(13) if hands[hand+suit*13+denom]]) for suit in range(4)])) for hand in range(0,52*4,52)) for hands in ohel]
 
 
+# Convert One Hot Encoded hands to cards.
+def OHEToCards(df, ohel):
+    return pd.DataFrame(ohel,index=df.index,columns=['C_'+nesw+suit+denom for nesw in NESW for suit in SHDC for denom in ranked_suit],dtype='int8')
+
+
 # Create column of binary encoded hands
 wd = {c:1<<n for n,c in enumerate(ranked_suit_rev)}
 def HandsToBin(hands):
@@ -450,7 +455,7 @@ def ContractType(tricks,suit):
     return ct
 
 
-def CategorifyContractType(ddmakes):
+def CategorifyContractTypeBySuit(ddmakes):
     contract_types_d = defaultdict(list)
     for dd in ddmakes:
         for direction,nesw in zip(NS_EW,dd): # todo: using NS_EW instead of NESW for now. switch to NESW?
@@ -458,6 +463,18 @@ def CategorifyContractType(ddmakes):
                 assert tricks is not None
                 ct = ContractType(tricks,suit)
                 contract_types_d['_'.join(['CT',direction,suit])].append(ct) # estimators don't like categorical dtype
+    return contract_types_d
+
+
+# Create columns of contract types by partnership by suit by contract. e.g. CT_NS_C_Game
+def CategorifyContractTypeByDirection(df):
+    contract_types_d = {}
+    cols = df.filter(regex=r'CT_(NS|EW)_[CDHSN]').columns
+    for c in cols:
+        for t in contract_types:
+            print(c,t,len((t == df[c]).values))
+            new_c = c+'_'+t
+            contract_types_d[new_c] = (t == df[c]).values
     return contract_types_d
 
 
@@ -498,7 +515,7 @@ def DDmakesToScores(ddmakes,vuls):
                 highest_make_level = tricks-1-tricks_in_a_book
                 for level in range(max(highest_make_level,0), max_bidding_level):
                     result = highest_make_level-level
-                    s = score(level, strain, result < 0, 0, v, result)
+                    s = score(level, strain, result < 0, 0, v, result) # double all sets
                     strainl.append((s,(level,strain),direction,result))
             # stable sort by contract then score
             sorted_direction = sorted(sorted(strainl,key=lambda k:k[1]),reverse=True,key=lambda k:k[0])
@@ -507,11 +524,10 @@ def DDmakesToScores(ddmakes,vuls):
     return scoresl
 
 
+
 def ContractToScores(df):
-    # obsoleted 'NSEW'. renamed to 'declarer'
-    # todo: rename declarer to Declarer for consistancy?
-    assert 'NSEW' not in df and 'declarer' in df
-    scores_l = df.apply(lambda r: [0]*14 if r['Contract']=='PASS' else scoresd[r['BidLvl']-1,StrainSymToValue(r['BidSuit']),DirectionSymToDealer(r['declarer']) in vul_directions[r['Vul']],len(r['Dbl']),'NSEW'.index(r['declarer'])],axis='columns') # scoresd[level, suit, vulnerability, double, declarer]
+    assert 'NSEW' not in df and 'Declarer_Direction' in df
+    scores_l = df.apply(lambda r: [0]*14 if r['Contract']=='PASS' else scoresd[r['BidLvl']-1,StrainSymToValue(r['BidSuit']),DirectionSymToDealer(r['Declarer_Direction']) in vul_directions[r['Vul']],len(r['Dbl']),'NSEW'.index(r['Declarer_Direction'])],axis='columns') # scoresd[level, suit, vulnerability, double, declarer]
     # adjusted score? assert df['Score_NS'].isin(scores_l).all(), df[df.apply(lambda r: r['Score_NS'] not in r['scores_l'],axis='columns')]
     return scores_l
 
@@ -617,7 +633,7 @@ def FilterBoards(df, cn=None, vul=None, direction=None, suit=None, contractType=
 # adapted (MIT license) from https://github.com/jfklorenz/Bridge-Scoring/blob/master/features/score.js
 # ================================================================
 # Scoring
-def score(level, suit, double, declarer, vulnerability, result):
+def score(level, suit, double, declarer, vulnerability, result, declarer_score=False):
     assert level in range(0, 7), f'ValueError: level {level} is invalid'
     assert suit in range(0, 5), f'ValueError: suit {suit} is invalid' # CDHSN
     assert double in range(0, 3), f'ValueError: double {double} is invalid' # ['','X','XX']
@@ -672,7 +688,7 @@ def score(level, suit, double, declarer, vulnerability, result):
         points = -sum([undertricks[vulnerability][double][min(i, 3)]
                        for i in range(0, -result)])
 
-    return points if declarer < 2 else -points  # negate points if EW
+    return points if declarer_score or declarer < 2 else -points  # negate points if EW
 
 # ================================================================
 
