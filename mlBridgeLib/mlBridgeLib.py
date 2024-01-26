@@ -56,6 +56,8 @@ PairDirectionToOpponentPairDirection = {'NS':'EW','EW':'NS'}
 allContracts = [(0,'Pass')]+[(l+1,s) for l in range(0,7) for s in CDHSN]
 allHigherContracts_d = {c:allContracts[n+1:] for n,c in enumerate(allContracts)}
 suit_names_d = {'S':'Spades','H':'Hearts','D':'Diamonds','C':'Clubs','N':'No-Trump'}
+contract_classes = ['PASS'] + [level+suit+dbl+decl for level in '1234567' for suit in 'CDHSN' for dbl in ['','X','XX'] for decl in 'NESW']
+contract_classes_dtype = pd.CategoricalDtype(contract_classes, ordered=False)
 
 
 def pd_options_display():
@@ -63,7 +65,7 @@ def pd_options_display():
     pd.options.display.max_columns = 0
     pd.options.display.max_colwidth = 100
     pd.options.display.min_rows = 500
-    pd.options.display.max_rows = 50 # 0
+    pd.options.display.max_rows = 10 # 0 is unlimited. 10 will use head(10/2) and tail(10/2).
     pd.options.display.precision = 2
     pd.options.display.float_format = '{:.2f}'.format
 
@@ -524,12 +526,12 @@ def DDmakesToScores(ddmakes,vuls):
     return scoresl
 
 
-
-def ContractToScores(df):
-    assert 'NSEW' not in df and 'Declarer_Direction' in df
-    scores_l = df.apply(lambda r: [0]*14 if r['Contract']=='PASS' else scoresd[r['BidLvl']-1,StrainSymToValue(r['BidSuit']),DirectionSymToDealer(r['Declarer_Direction']) in vul_directions[r['Vul']],len(r['Dbl']),'NSEW'.index(r['Declarer_Direction'])],axis='columns') # scoresd[level, suit, vulnerability, double, declarer]
+def ContractToScores(df,direction='Declarer_Direction'):
+    assert 'NSEW' not in df and direction in df
+    scores_l = df.apply(lambda r: [0]*14 if r['Contract']=='PASS' else scoresd[r['BidLvl']-1,StrainSymToValue(r['BidSuit']),DirectionSymToDealer(r[direction]) in vul_directions[r['Vul']],len(r['Dbl']),'NSEW'.index(r[direction])],axis='columns') # scoresd[level, suit, vulnerability, double, declarer]
     # adjusted score? assert df['Score_NS'].isin(scores_l).all(), df[df.apply(lambda r: r['Score_NS'] not in r['scores_l'],axis='columns')]
     return scores_l
+
 
 # Convert score tuples into Par.
 # todo: rewrite into two defs; looping, core logic

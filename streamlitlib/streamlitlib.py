@@ -304,6 +304,9 @@ def create_pdf(pdf_assets, title, output_filename=None):
             story.extend(markdown_to_paragraphs(a, styles))
         # Convert each DataFrame in the list to a reportlab table and add it to the story
         elif isinstance(a, pd.DataFrame):
+            print('a:',len(a),len(a.columns))
+            if len(a.columns) == 1:
+                a = pd.concat([a,pd.Series('',name='',index=a.index)],axis='columns') # workaround: 1 column dataframes error out so append a blank column
             story.append(dataframe_to_table(a.iloc[0:30,0:11])) # take only first 30 rows and 12 columns
             story.append(Spacer(1, 12))
         else:
