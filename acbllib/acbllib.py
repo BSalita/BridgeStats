@@ -1,5 +1,16 @@
 # functions which are specific to acbl; downloading acbl webpages, api calls.
 
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO) # or DEBUG
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def print_to_log_info(*args):
+    print_to_log(logging.INFO, *args)
+def print_to_log_debug(*args):
+    print_to_log(logging.DEBUG, *args)
+def print_to_log(level, *args):
+    logging.log(level, ' '.join(str(arg) for arg in args))
+
 import pandas as pd
 import re
 import traceback
@@ -30,22 +41,22 @@ def get_club_results(cns, base_url, acbl_url, acblPath, read_local):
         ncn += 1
         url = base_url+str(cn)+'/'
         file = url.replace(acbl_url,'')+str(cn)+'.html'
-        print(f'Processing file ({ncn}/{total_clubs}): {file}')
+        print_to_log_info(f'Processing file ({ncn}/{total_clubs}): {file}')
         path = acblPath.joinpath(file)
         if read_local and path.exists() and path.stat().st_size > 200:
             html = path.read_text(encoding="utf-8")
-            print(f'Reading local {file}: len={len(html)}')
+            print_to_log_info(f'Reading local {file}: len={len(html)}')
         else:
-            print(f'Requesting {url}')
+            print_to_log_info(f'Requesting {url}')
             try:
                 r = requests.get(url,headers=headers)
             except:
-                print(f'Except: status:{r.status_code} {url}')
+                print_to_log_info(f'Except: status:{r.status_code} {url}')
             else:
                 html = r.text
-                print(f'Creating {file}: len={len(html)}')
+                print_to_log_info(f'Creating {file}: len={len(html)}')
             if r.status_code != 200:
-                print(f'Error: status:{r.status_code} {url}')
+                print_to_log_info(f'Error: status:{r.status_code} {url}')
                 time.sleep(60) # obsolete?
                 failed_urls.append(url)
                 continue
@@ -54,8 +65,8 @@ def get_club_results(cns, base_url, acbl_url, acblPath, read_local):
             path.write_text(html, encoding="utf-8")
             time.sleep(1) # need to self-throttle otherwise acbl returns 403 "forbidden". obsolete?
         htmls[str(cn)] = html
-    print(f'Failed Urls: len:{len(failed_urls)} Urls:{failed_urls}')
-    print(f"Done: Total clubs processed:{total_clubs}: Total url failures:{len(failed_urls)}")
+    print_to_log_info(f'Failed Urls: len:{len(failed_urls)} Urls:{failed_urls}')
+    print_to_log_info(f"Done: Total clubs processed:{total_clubs}: Total url failures:{len(failed_urls)}")
     return htmls, total_clubs, failed_urls
 
 
@@ -66,22 +77,22 @@ def extract_club_games(htmls, acbl_url):
     total_htmls = len(htmls)
     for n,(cn,html) in enumerate(htmls.items()):
         n += 1
-        print(f'Processing club ({n}/{total_htmls}) {cn}')
+        print_to_log_info(f'Processing club ({n}/{total_htmls}) {cn}')
         bs = BeautifulSoup(html, "html.parser") # todo: do this only once.
         html_table = bs.find('table')
         if html_table is None:
-            print(f'Invalid club-result for {cn}')
+            print_to_log_info(f'Invalid club-result for {cn}')
             continue
         # /html/body/div[2]/div/div[2]/div[1]/div[2]
         ClubInfo = bs.find('div', 'col-md-8')
-        #print(ClubInfo)
+        #print_to_log(ClubInfo)
         ci = {}
         ci['Name'] = ClubInfo.find('h1').contents[0].strip() # get first text and strip
         ci['Location'] = ClubInfo.find('h5').contents[0].strip() # get first text and strip
         if ClubInfo.find('a'):
             ci['WebSite'] = ClubInfo.find('a')['href'] # get href of first a
         ClubInfos[cn] = ci
-        print(f'{ci}')
+        print_to_log_info(f'{ci}')
         # assumes first table is our target
         d = pd.read_html(str(html_table))
         assert len(d) == 1
@@ -93,7 +104,7 @@ def extract_club_games(htmls, acbl_url):
         df['ResultID'] = [result.rsplit('/', 1)[-1] for result in hrefs]
         df['ResultUrl'] = hrefs
         dfs[cn] = df
-    print(f"Done: Total clubs processed:{len(dfs)}")
+    print_to_log_info(f"Done: Total clubs processed:{len(dfs)}")
     return dfs, ClubInfos    
 
 
@@ -106,7 +117,7 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
     headers={"user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36"}
     for ndf,(kdf,df) in enumerate(filtered_clubs.items()):
         if ndf < starting_nclub or ndf >= ending_nclub:
-            print(f"Skipping club #{ndf} {kdf}") # obsolete when filtered_clubs works
+            print_to_log_info(f"Skipping club #{ndf} {kdf}") # obsolete when filtered_clubs works
             continue
         ndf += 1
         except_count = 0
@@ -116,7 +127,7 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
             total_urls_processed += 1
             html_file = url.replace(acbl_url,'').replace('club-results','club-results/'+str(cn))+'.html'
             json_file = html_file.replace('.html','.data.json')
-            print(f'Processing club ({ndf}/{total_clubs}): result file ({nurl}/{total_results}): {html_file}')
+            print_to_log_info(f'Processing club ({ndf}/{total_clubs}): result file ({nurl}/{total_results}): {html_file}')
             #if ndf < 1652:
             #    continue
             html_path = acblPath.joinpath(html_file)
@@ -125,38 +136,38 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
             data_json = None
             if read_local and json_path.exists():
                 #if html_path.exists():
-                #    print(f'Found local html file: {html_file}')
+                #    print_to_log(f'Found local html file: {html_file}')
                 #else:
-                #    print(f'Missing local html file: {html_file}')
+                #    print_to_log(f'Missing local html file: {html_file}')
                 try:
                     with open(json_path, 'r') as f:
                         data_json = json.load(f)
                 except:
-                    print(f'Exception when reading json file: {json_file}. Deleting html and json files.')
+                    print_to_log_info(f'Exception when reading json file: {json_file}. Deleting html and json files.')
                 else:
                     total_local_files_read += 1
-                    print(f'Reading local ({total_local_files_read}/{total_local_files}) file:{json_path}: len:{json_path.stat().st_size}')
+                    print_to_log_info(f'Reading local ({total_local_files_read}/{total_local_files}) file:{json_path}: len:{json_path.stat().st_size}')
             else:
-                print(f'Requesting {url}')
+                print_to_log_info(f'Requesting {url}')
                 try:
                     r = requests.get(url,headers=headers)
                 except Exception as ex:
-                    print(f'Exception: count:{except_count} type:{type(ex).__name__} args:{ex.args}')
+                    print_to_log_info(f'Exception: count:{except_count} type:{type(ex).__name__} args:{ex.args}')
                     if except_count > 5:
-                        print('Except count exceeded')
+                        print_to_log_info('Except count exceeded')
                         break # skip url
                     except_count += 1
                     time.sleep(1) # just in case the exception is transient
                     continue # retry url
                 except KeyboardInterrupt as e:
-                    print(f"Error: {type(e).__name__} while processing file:{url}")
-                    print(traceback.format_exc())
+                    print_to_log_info(f"Error: {type(e).__name__} while processing file:{url}")
+                    print_to_log_info(traceback.format_exc())
                     canceled = True
                     break
                 else:
                     except_count = 0            
                 html = r.text
-                print(f'Creating {html_file}: len={len(html)}')
+                print_to_log_info(f'Creating {html_file}: len={len(html)}')
                 # some clubs return 200 (ok) but with instructions to login (len < 200).
                 # skip clubs returning errors or tiny files. assumes one failed club result will be true for all club's results.
                 if r.status_code != 200 or len(html) < 200:
@@ -167,27 +178,27 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
                 html_path.write_text(html, encoding="utf-8")
                 bs = BeautifulSoup(html, "html.parser")
                 scripts = bs.find_all('script')
-                #print(scripts)
+                #print_to_log(scripts)
                 for script in scripts:
                     if script.string: # not defined for all scripts
-                        #print(script.string)
+                        #print_to_log(script.string)
                         vardata = re.search('var data = (.*);\n', script.string)
                         if vardata:
                             data_json = json.loads(vardata.group(1))
-                            #print(json.dumps(data_json, indent=4))
-                            print(f"Writing {json_path}")
+                            #print_to_log(json.dumps(data_json, indent=4))
+                            print_to_log_info(f"Writing {json_path}")
                             with open(json_path, 'w') as f:
                                 json.dump(data_json, f, indent=2)
                             bbo_tournament_id = data_json["bbo_tournament_id"]
-                            print(f'bbo_tournament_id: {bbo_tournament_id}')
+                            print_to_log_info(f'bbo_tournament_id: {bbo_tournament_id}')
                 #time.sleep(1) # obsolete?
             # if no data_json file read, must be an error so delete both html and json files.
             if not data_json:
                 html_path.unlink(missing_ok=True)
                 json_path.unlink(missing_ok=True)
-            #print(f'Files processed ({total_urls_processed}/{total_local_files_read}/{total_urls_to_process})')
-    print(f'Failed Urls: len:{len(failed_urls)} Urls:{failed_urls}')
-    print(f"Done: Totals: clubs:{total_clubs} urls:{total_urls_processed} local files read:{total_local_files_read}: failed urls:{len(failed_urls)}")
+            #print_to_log(f'Files processed ({total_urls_processed}/{total_local_files_read}/{total_urls_to_process})')
+    print_to_log_info(f'Failed Urls: len:{len(failed_urls)} Urls:{failed_urls}')
+    print_to_log_info(f"Done: Totals: clubs:{total_clubs} urls:{total_urls_processed} local files read:{total_local_files_read}: failed urls:{len(failed_urls)}")
     return total_urls_processed, total_local_files_read, failed_urls
 
 
@@ -210,18 +221,18 @@ def club_results_json_to_sql(urls, starting_nfile=0, ending_nfile=0, initially_d
         #r = requests.get(url)
         json_file = url
         sql_file = url.with_suffix('.sql')
-        print(f"Processing ({nfile}/{total_urls}): file:{json_file.as_posix()}")
+        print_to_log_info(f"Processing ({nfile}/{total_urls}): file:{json_file.as_posix()}")
         if skip_existing_files:
             if sql_file.exists():
-               print(f"Skipping: File exists:{sql_file.as_posix()}")
+               print_to_log_info(f"Skipping: File exists:{sql_file.as_posix()}")
                continue
         try:
             data_json = None
             with open(json_file, 'r') as f:
                 data_json = json.load(f)
-            #print(f"Reading {json_file.as_posix()} dict len:{len(data_json)}")
+            #print_to_log(f"Reading {json_file.as_posix()} dict len:{len(data_json)}")
             if len(event_types) > 0 and data_json['type'] not in event_types:
-                #print(f"Skipping type:{data_json['type']}: file{json_file.as_posix()}")
+                #print_to_log(f"Skipping type:{data_json['type']}: file{json_file.as_posix()}")
                 continue
             tables = defaultdict(lambda :defaultdict(dict))
             primary_keys = ['id']
@@ -230,11 +241,11 @@ def club_results_json_to_sql(urls, starting_nfile=0, ending_nfile=0, initially_d
                 mlBridgeLib.CreateSqlFile(tables,f,primary_keys)
             total_files_written += 1
         except Exception as e:
-            print(f"Error: {e}: type:{data_json['type']} file:{url.as_posix()}")
+            print_to_log_info(f"Error: {e}: type:{data_json['type']} file:{url.as_posix()}")
         else:
-            print(f"Writing: type:{data_json['type']} file:{sql_file.as_posix()}")
+            print_to_log_info(f"Writing: type:{data_json['type']} file:{sql_file.as_posix()}")
 
-    print(f"All files processed:{total_urls} files written:{total_files_written} total time:{round(time.time()-start_time,2)}")
+    print_to_log_info(f"All files processed:{total_urls} files written:{total_files_written} total time:{round(time.time()-start_time,2)}")
     return total_urls, total_files_written
 
 
@@ -246,11 +257,11 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
         db_connection_string = db_memory_connection_string # memory based db
 
     if delete_db and sqlalchemy_utils.functions.database_exists(db_file_connection_string):
-        print(f"Deleting db:{db_file_connection_string}")
+        print_to_log_info(f"Deleting db:{db_file_connection_string}")
         sqlalchemy_utils.functions.drop_database(db_file_connection_string) # warning: can't delete file if in use by another app (restart kernel).
 
     if not sqlalchemy_utils.functions.database_exists(db_connection_string):
-        print(f"Creating db:{db_connection_string}")
+        print_to_log_info(f"Creating db:{db_connection_string}")
         sqlalchemy_utils.functions.create_database(db_connection_string)
         create_tables = True
         
@@ -258,7 +269,7 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
     raw_connection = engine.raw_connection()
 
     if create_tables:
-        print(f"Creating tables from:{create_tables_sql_file}")
+        print_to_log_info(f"Creating tables from:{create_tables_sql_file}")
         with open(create_tables_sql_file, 'r') as f:
             create_sql = f.read()
         raw_connection.executescript(create_sql) # create tables
@@ -284,7 +295,7 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
         nfile += 1
         sql_file = url
         if (nfile % 100) == 0:
-            print(f"Executing SQL script ({nfile}/{total_filtered_urls}): file:{sql_file.as_posix()}")
+            print_to_log_info(f"Executing SQL script ({nfile}/{total_filtered_urls}): file:{sql_file.as_posix()}")
         
         try:
             sql_script = None
@@ -293,53 +304,53 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
             start_script_time = time.time()
             raw_connection.executescript(sql_script)
         except Exception as e:
-            print(f"Error: {type(e).__name__} while processing file:{url.as_posix()}")
-            print(traceback.format_exc())
-            print(f"Every json field must be an entry in the schema file. Update schema if needed.")
-            print(f"Removing {url.as_posix()}")
+            print_to_log_info(f"Error: {type(e).__name__} while processing file:{url.as_posix()}")
+            print_to_log_info(traceback.format_exc())
+            print_to_log_info(f"Every json field must be an entry in the schema file. Update schema if needed.")
+            print_to_log_info(f"Removing {url.as_posix()}")
             sql_file.unlink(missing_ok=True) # delete any bad files, fix issues, rerun.
             continue # todo: log error.
             #break
         except KeyboardInterrupt as e:
-            print(f"Error: {type(e).__name__} while processing file:{url.as_posix()}")
-            print(traceback.format_exc())
+            print_to_log_info(f"Error: {type(e).__name__} while processing file:{url.as_posix()}")
+            print_to_log_info(traceback.format_exc())
             canceled = True
             break
         else:
             script_execution_time = time.time()-start_script_time
             if (nfile % 100) == 0:
-                print(f"SQL script executed: file:{url.as_posix()}: time:{round(script_execution_time,2)}")
+                print_to_log_info(f"SQL script executed: file:{url.as_posix()}: time:{round(script_execution_time,2)}")
             total_script_execution_time += script_execution_time
             total_scripts_executed += 1
 
-    print(f"SQL scripts executed ({total_scripts_executed}/{total_filtered_urls}/{len(urls)}): total changes:{raw_connection.total_changes} total script execution time:{round(time.time()-start_time,2)}: avg script execution time:{round(total_script_execution_time/max(1,total_scripts_executed),2)}")
+    print_to_log_info(f"SQL scripts executed ({total_scripts_executed}/{total_filtered_urls}/{len(urls)}): total changes:{raw_connection.total_changes} total script execution time:{round(time.time()-start_time,2)}: avg script execution time:{round(total_script_execution_time/max(1,total_scripts_executed),2)}")
     # if using memory db, write memory db to disk file.
     if not canceled:
         if perform_integrity_checks:
             # todo: research how to detect and display failures? Which checks are needed?
-            print(f"Performing quick_check on file")
+            print_to_log_info(f"Performing quick_check on file")
             raw_connection.execute("PRAGMA quick_check;") # takes 7m on disk
-            print(f"Performing foreign_key_check on file")
+            print_to_log_info(f"Performing foreign_key_check on file")
             raw_connection.execute("PRAGMA foreign_key_check;") # takes 3m on disk
-            print(f"Performing integrity_check on file")
+            print_to_log_info(f"Performing integrity_check on file")
             raw_connection.execute("PRAGMA integrity_check;") # takes 25m on disk
         if not write_direct_to_disk:
-            print(f"Writing memory db to file (takes 1+ hours):{db_file_connection_string}")
+            print_to_log_info(f"Writing memory db to file (takes 1+ hours):{db_file_connection_string}")
             engine_file = sqlalchemy.create_engine(db_file_connection_string)
             raw_connection_file = engine_file.raw_connection()
             raw_connection.backup(raw_connection_file.connection) # takes 45m
             raw_connection_file.close()
             engine_file.dispose()
-            print(f"Saved {db_file_path}: size:{db_file_path.stat().st_size}")
+            print_to_log_info(f"Saved {db_file_path}: size:{db_file_path.stat().st_size}")
 
     raw_connection.close()
     engine.dispose()
-    print("Done.")
+    print_to_log_info("Done.")
     return total_scripts_executed # not sure if any return value is needed.
 
 
 def get_club_results_details_data(url):
-    print('details url:',url)
+    print_to_log_info('details url:',url)
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
     response = requests.get(url, headers=headers)
     assert response.status_code == 200, [url, response.status_code]
@@ -363,7 +374,7 @@ def get_club_results_details_data(url):
 
 def get_club_results_from_acbl_number(acbl_number):
     url = f"https://my.acbl.org/club-results/my-results/{acbl_number}"
-    print('my-results url:',url)
+    print_to_log_info('my-results url:',url)
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
     response = requests.get(url, headers=headers)
     assert response.status_code == 200, [url, response.status_code]
@@ -395,7 +406,7 @@ def get_tournament_session_results(session_id, acbl_api_key):
     query = {'id':session_id,'full_monty':1}
     params = urllib.parse.urlencode(query)
     url = path+'?'+params
-    print('tournament session url:',url)
+    print_to_log_info('tournament session url:',url)
     response = requests.get(url, headers=headers)
     return response
 
@@ -421,28 +432,28 @@ def download_tournament_player_history(player_id, acbl_api_key):
         try:
             response = requests.get(url, headers=headers)
         except Exception as ex:
-            print(f'Exception: count:{except_count} type:{type(ex).__name__} args:{ex.args}')
+            print_to_log_info(f'Exception: count:{except_count} type:{type(ex).__name__} args:{ex.args}')
             if except_count > 5:
-                print('Except count exceeded')
+                print_to_log_info('Except count exceeded')
                 break # skip url
             except_count += 1
             time.sleep(1) # just in case the exception is transient
             continue # retry url
         except KeyboardInterrupt as e:
-            print(f"Error: {type(e).__name__} while processing file:{url}")
-            print(traceback.format_exc())
+            print_to_log_info(f"Error: {type(e).__name__} while processing file:{url}")
+            print_to_log_info(traceback.format_exc())
             return None
         else:
             except_count = 0
         if response.status_code in [400,500,504]: # 500 is unknown response code. try skipping player
-            print(f'Status Code:{response.status_code}: count:{len(json_responses)} skipping') # 4476921 - Thx Merle.
+            print_to_log_info(f'Status Code:{response.status_code}: count:{len(json_responses)} skipping') # 4476921 - Thx Merle.
             # next_page_url = None
             # sessions_total = 0
             break
         assert response.status_code == 200, (url, response.status_code) # 401 is authorization error often because Personal Access Token has expired.
         json_response = response.json()
         #json_pretty = json.dumps(json_response, indent=4)
-        #print(json_pretty)
+        #print_to_log(json_pretty)
         json_responses.append(json_response)
         url = json_response['next_page_url']
     return path, json_responses
@@ -455,21 +466,21 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
     #canceled = False
     for n,player_id in enumerate(sorted(player_ids)):
         if player_id.startswith('tmp:') or player_id.startswith('#'): # somehow #* crept into player_id
-            print(f'Skipping player_id:{player_id}')
+            print_to_log_info(f'Skipping player_id:{player_id}')
             continue
         else:
-            print(f'Processing player_id:{player_id}')
+            print_to_log_info(f'Processing player_id:{player_id}')
         if dirPath.exists():
             session_file_count = len(list(dirPath.glob('*.session.json')))
-            print(f'dir exists: file count:{session_file_count} dir:{dirPath}')
+            print_to_log_info(f'dir exists: file count:{session_file_count} dir:{dirPath}')
             #if session_file_count == 0: # todo: ignore players who never played a tournament?
-            #    print(f'dir empty -- skipping')
+            #    print_to_log(f'dir empty -- skipping')
             #    continue
             #if session_file_count > 0: # todo: temp?
-            #    print(f'dir not empty -- skipping')
+            #    print_to_log(f'dir not empty -- skipping')
             #    continue
         else:
-            print(f'Creating dir:{dirPath}')
+            print_to_log_info(f'Creating dir:{dirPath}')
             dirPath.mkdir(parents=True,exist_ok=True)
             session_file_count = 0
         url, json_responses = download_tournament_player_history(player_id, acbl_api_key)
@@ -478,13 +489,13 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
         get_count = len(json_responses)
         if get_count == 0: # skip player_id's generating errors. e.g. player_id 5103045, 5103045, 5103053
             continue
-        print(f"{n}/{len(player_ids)} gets:{get_count} rate:{round((time.time()-start_time)/get_count,2)} {player_id=}")
+        print_to_log_info(f"{n}/{len(player_ids)} gets:{get_count} rate:{round((time.time()-start_time)/get_count,2)} {player_id=}")
         #time.sleep(1) # throttle api calling. Maybe not needed as api is taking longer than 1s.
         sessions_count = 0
         for json_response in json_responses:
             sessions_total = json_response['total'] # is same for every page
             if sessions_total == session_file_count: # sometimes won't agree because identical sessions. revised results?
-                print(f'File count correct: {dirPath}: terminating {player_id} early.')
+                print_to_log_info(f'File count correct: {dirPath}: terminating {player_id} early.')
                 sessions_count = sessions_total
                 break
             for data in json_response['data']:
@@ -493,20 +504,20 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
                 filePath_sql = dirPath.joinpath(session_id+'.session.sql')
                 filePath_json = dirPath.joinpath(session_id+'.session.json')
                 if filePath_sql.exists() and filePath_json.exists() and filePath_sql.stat().st_ctime > filePath_json.stat().st_ctime:
-                    print(f'{sessions_count}/{sessions_total}: File exists: {filePath_sql}: skipping')
+                    print_to_log_info(f'{sessions_count}/{sessions_total}: File exists: {filePath_sql}: skipping')
                     #if filePath_json.exists(): # json file is no longer needed?
-                    #    print(f'Deleting JSON file: {filePath_json}')
+                    #    print_to_log(f'Deleting JSON file: {filePath_json}')
                     #    filePath_json.unlink(missing_ok=True)
                     break # continue will skip file. break will move on to next player
                 if filePath_json.exists():
-                    print(f'{sessions_count}/{sessions_total}: File exists: {filePath_json}: skipping')
+                    print_to_log_info(f'{sessions_count}/{sessions_total}: File exists: {filePath_json}: skipping')
                     break # continue will skip file. break will move on to next player
                 response = get_tournament_session_results(session_id, acbl_api_key)
                 assert response.status_code == 200, response.status_code
                 session_json = response.json()
                 #json_pretty = json.dumps(json_response, indent=4)
-                print(f'{sessions_count}/{sessions_total}: Writing:{filePath_json} len:{len(session_json)}')
+                print_to_log_info(f'{sessions_count}/{sessions_total}: Writing:{filePath_json} len:{len(session_json)}')
                 with open(filePath_json,'w',encoding='UTF8') as f:
                     f.write(json.dumps(session_json, indent=4))
         if sessions_count != sessions_total:
-            print(f'Session count mismatch: {dirPath}: variance:{sessions_count-sessions_total}')
+            print_to_log_info(f'Session count mismatch: {dirPath}: variance:{sessions_count-sessions_total}')

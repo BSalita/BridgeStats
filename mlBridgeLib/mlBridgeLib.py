@@ -10,6 +10,17 @@
 # create validation functions for DDmakes, Hands, LoTT, HCP, dtypes, Vul, Dealer, Score, etc.
 
 
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO) # or DEBUG
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def print_to_log_info(*args):
+    print_to_log(logging.INFO, *args)
+def print_to_log_debug(*args):
+    print_to_log(logging.DEBUG, *args)
+def print_to_log(level, *args):
+    logging.log(level, ' '.join(str(arg) for arg in args))
+
 import numpy as np
 import pandas as pd
 import os
@@ -109,10 +120,10 @@ def append_double_dummy_results(df):
         # dd.pprint() # display deal
         # print()
         # tt.pprint() # display double dummy table
-        # print()
-        # print(ps)
-        # print()
-        # print(pc)
+        # print_to_log()
+        # print_to_log(ps)
+        # print_to_log()
+        # print_to_log(pc)
         nsew_flat_l = [sd[suit][direction] for direction in direction_order for suit in suit_order]
         rows.append(nsew_flat_l)
     assert len(rows) == len(df)
@@ -158,7 +169,7 @@ def calculate_single_dummy_probabilities(deal, produce=100):
             s[0] = '...'
             s[2] = '...'
         predeal_string = 'N:'+' '.join(s)
-        #print(f"predeal:{predeal_string}")
+        #print_to_log(f"predeal:{predeal_string}")
 
         d_t, t_t, tables = generate_single_dummy_deals(predeal_string, produce, show_progress=False)
 
@@ -168,11 +179,11 @@ def calculate_single_dummy_probabilities(deal, produce=100):
         suit_order = [3,2,1,0,4] # SHDCN order?
         for ii,(dd,sd,tt) in enumerate(zip(d_t,t_t,tables)):
             # if ii < max_display:
-                # print(f"Deal:{ii+1} Fixed:{ns_ew} Generated:{ii+1}/{produce}")
+                # print_to_log(f"Deal:{ii+1} Fixed:{ns_ew} Generated:{ii+1}/{produce}")
                 # dd.pprint()
-                # print()
+                # print_to_log()
                 # tt.pprint()
-                # print()
+                # print_to_log()
             nswe_flat_l = [sd[suit][direction] for direction in direction_order for suit in suit_order]
             rows.append([dd.to_pbn()]+nswe_flat_l)
 
@@ -272,12 +283,12 @@ def validate_brs(brs):
     sorted_brs = '22223333444455556666777788889999AAAACCCCDDDDHHHHJJJJKKKKQQQQSSSSTTTT' # sorted brs must match this string
     s = brs.replace('10','T')
     if ''.join(sorted(s)) != sorted_brs:
-        print('validate_brs: Invalid brs:', brs, s)
+        print_to_log_info('validate_brs: Invalid brs:', brs, s)
         return False
     for i in range(0,len(sorted_brs),len(sorted_brs)*4):
         split_shdc = re.split(r'[SHDC]',s[i:i+13+4])
         if len(split_shdc) != 4+1 or sum(map(len,split_shdc)) != 13: # not validating sort order. call it correct-ish.
-            print('validate_brs: Invalid len:', i, brs, s[i:i+13+4], split_shdc)
+            print_to_log_info('validate_brs: Invalid len:', i, brs, s[i:i+13+4], split_shdc)
             return False
     return True
 
@@ -474,7 +485,7 @@ def CategorifyContractTypeByDirection(df):
     cols = df.filter(regex=r'CT_(NS|EW)_[CDHSN]').columns
     for c in cols:
         for t in contract_types:
-            print(c,t,len((t == df[c]).values))
+            print_to_log_debug('CT:',c,t,len((t == df[c]).values))
             new_c = c+'_'+t
             contract_types_d[new_c] = (t == df[c]).values
     return contract_types_d
@@ -543,17 +554,17 @@ def ScoresToPar(scoresl):
         direction = 0
         while(True):
             d_ew = direction & 1
-            #print(directionsl[direction])
+            #print_to_log(directionsl[direction])
             for par_score in directionsl[direction]: # for each possible remaining bid
                 if par_scoresl[0][1] < par_score[1]: # bid is sufficient
-                    #print("suff:",par_scoresl[0],par_score)
+                    #print_to_log("suff:",par_scoresl[0],par_score)
                     psl_ew = par_scoresl[0][2] & 1
-                    #print(direction,d_ew,ps_ew,((direction ^ ps_ew) & 1),((d_ew ^ ps_ew) & 1))
+                    #print_to_log(direction,d_ew,ps_ew,((direction ^ ps_ew) & 1),((d_ew ^ ps_ew) & 1))
                     assert ((direction ^ psl_ew) & 1) == ((d_ew ^ psl_ew) & 1)
                     opponents = d_ew != psl_ew
                     assert (d_ew != psl_ew) == opponents
                     if opponents:
-                        #print("oppo:",-par_scoresl[0][0],par_score[0],d_ew,ps_ew)
+                        #print_to_log("oppo:",-par_scoresl[0][0],par_score[0],d_ew,ps_ew)
                         if -par_scoresl[0][0] <= par_score[0]: # bidder was opponent, improved score is a sacrifice
                             par_scoresl.insert(0,par_score)
                             #error
@@ -562,13 +573,13 @@ def ScoresToPar(scoresl):
                             break
                     else:
                         if par_scoresl[0][0] <= par_score[0]: # bidder was partnership, take improved score
-                            #print("same:",par_scoresl[0][0],par_score[0],len(par_scoresl))
+                            #print_to_log("same:",par_scoresl[0][0],par_score[0],len(par_scoresl))
                             par_scoresl.insert(0,par_score)
                             #break
                         else:
                             break
             direction = (direction+1) % len(NESW)
-            #print(direction,par_scoresl[0][2])
+            #print_to_log(direction,par_scoresl[0][2])
             if direction == par_scoresl[0][2]: # bidding is over when new direction is last bidder
                 break
         parl = []
@@ -616,7 +627,7 @@ def FilterBoards(df, cn=None, vul=None, direction=None, suit=None, contractType=
         elif vul == 'Both':
             df = df[df['Vul_NS'] & df['Vul_NS']]  # only Both
         else:
-            print(f'FilterBoards: Error: Invalid vul:{vul}')
+            print_to_log_info(f'FilterBoards: Error: Invalid vul:{vul}')
     if not direction is None:
         # either 'NS','EW' # Single direction is problematic so using NS, EW
         df = df[df['Par_Dir'] == direction]
@@ -937,7 +948,7 @@ def ListOfClubsToProcess(clubNumbers, inputFiles, outputFiles, clubsPath, forceR
         clubDir = clubsPath.joinpath(clubNumber.name)
         # all input files must exist
         if sum([not clubDir.joinpath(inputFileToProcess).exists() for inputFileToProcess in inputFiles]) != 0:
-            print(
+            print_to_log_info(
                 f'ListOfClubsToProcess: Club {clubNumber.name} has some missing input files: {inputFiles}: skipping.')
             continue
         # creating list of input file sizes, first file only, for later sorting.
@@ -1011,7 +1022,7 @@ def ComputeMatchPointResults(results):
         #scoreToMP = [score, beat, count, mps, mps/(numOfPairs-1)]
         scoreToMP = [score, beat, count, mps, mps if numOfPairs == 1 else mps/(numOfPairs-1)] # numOfPairs == 1 needs testing
         scoreToMPs.append(scoreToMP)
-        # print(scoreToMP)
+        # print_to_log(scoreToMP)
         beat += count
     assert beat == numOfPairs
     assert len(scoreToMPs) > 0 or numOfPairs == 0
@@ -1126,7 +1137,7 @@ def GetTcgMPs(tcgd, keyCol):
 
 def json_walk_print(key,value):
     if type(value) is dict:
-        #print('dict:'+key)
+        #print_to_log('dict:'+key)
         for k,v in value.items():
             kk = key+'.'+k
             json_walk_print(kk,v)
@@ -1138,27 +1149,27 @@ def json_walk_print(key,value):
     else:
         if type(value) is str:
             value = '"'+value+'"'
-        print(key+'='+str(value))
+        print_to_log_debug(key+'='+str(value))
     return
 
 
 # walk a json file building a table suitable for generating SQL statements.
 # usage: json_to_sql_walk(tables,'main',data_json,primary_keys) where 'main' is first table and data_json is a string containing json.
 def sql_create_tables(tables,key,value):
-    #print(tables, key, value)
-    #print(f"{key}={value}")
+    #print_to_log(tables, key, value)
+    #print_to_log(f"{key}={value}")
     splited = key.split('.')
     tableName = splited[-3]
     fieldId = splited[-2]
     fieldName = splited[-1]
-    #print("ct:", tableName, fieldId, fieldName, type(value))
+    #print_to_log("ct:", tableName, fieldId, fieldName, type(value))
     # removed assert as they were json schema specific
     #assert not tableName[0].isdigit(), [tableName, fieldId, fieldName, type(value)]
     #assert fieldId[0].isdigit(), [tableName, fieldId, fieldName, type(value)]
     #assert not fieldName[0].isdigit(), [tableName, fieldId, fieldName, type(value)]
     if fieldName in tables[tableName][fieldId]:
-        #print(type(tables[tableName][fieldId][fieldName]))
-        #print(tableName,fieldId,fieldName)
+        #print_to_log(type(tables[tableName][fieldId][fieldName]))
+        #print_to_log(tableName,fieldId,fieldName)
         assert type(tables[tableName][fieldId][fieldName]) is list
         if type(value) is list:
             tables[tableName][fieldId][fieldName] += value
@@ -1174,9 +1185,9 @@ def sql_create_tables(tables,key,value):
 
 
 def json_to_sql_walk(tables,key,last_id,uid,value,primary_keys):
-    #print(tables,key,last_id,uid,value)
+    #print_to_log(tables,key,last_id,uid,value)
     if type(value) is dict:
-        #print('dict:',key,uid)
+        #print_to_log('dict:',key,uid)
         if any([pk in value for pk in primary_keys]):
             for pk in primary_keys:
                 if pk in value:
@@ -1195,9 +1206,9 @@ def json_to_sql_walk(tables,key,last_id,uid,value,primary_keys):
             else:
                 json_to_sql_walk(tables,key+'.'+'-'.join(uid)+'.'+k,last_id,uid,v,primary_keys)
     elif type(value) is list:
-        #print('list:',key,uid)
+        #print_to_log('list:',key,uid)
         if len(value) > 0: # turn empty lists into NULL?
-            #print("empty list:",key)
+            #print_to_log("empty list:",key)
             sql_create_tables(tables,key,[])
         for n,v in enumerate(value):
             json_to_sql_walk(tables,key,last_id,uid+[str(n)],v,primary_keys)
@@ -1219,13 +1230,13 @@ def CreateSqlFile(tables,f,primary_keys):
             print(f"INSERT INTO \"{k}\" (\"{s}\")", file=f)
             values = []
             for kkk,vvv in vv.items():
-                #print(kkk,vvv)
+                #print_to_log(kkk,vvv)
                 if type(vvv) is str:
                     values.append('\''+vvv.replace('\'','\'\'')+'\'') # escape embedded double-quotes with sql's double double-quotes
                 elif vvv is None:
                     values.append("NULL")
                 elif type(vvv) is list:
-                    #print("list:",kkk,vvv)
+                    #print_to_log("list:",kkk,vvv)
                     # patch - 2023-01-19 - added - added code to quote list items if they're strings
                     if len(vvv)>0 and isinstance(vvv[0],str):
                         values.append('\'["'+'","'.join(str(vvvv).replace('\'','\'\'') for vvvv in vvv)+'"]\'') # escape embedded double-quotes with sql's double double-quotes
@@ -1240,7 +1251,7 @@ def CreateSqlFile(tables,f,primary_keys):
             for pk in primary_keys:
                 if pk in vv:
                     print(f"ON CONFLICT({pk}) DO UPDATE SET {s}", file=f, end='')
-            #print('created_at' in vv.keys(),'updated_at' in vv.keys())
+            #print_to_log('created_at' in vv.keys(),'updated_at' in vv.keys())
             assert ('created_at' in vv.keys()) == ('updated_at' in vv.keys())
             if 'created_at' in vv.keys():
                 print(f"\nWHERE excluded.\"updated_at\" > \"updated_at\" OR (excluded.\"updated_at\" = \"updated_at\" AND excluded.\"created_at\" > \"created_at\")", file=f, end='')
@@ -1260,18 +1271,18 @@ def CreateSqlTablesFile(f,tables,primary_keys):
         print(f'CREATE TABLE "{k}" (', file=f)
         assert type(v) is defaultdict
         for kk,vv in v.items():
-            #print('uid:','.'.join([k,kk]))
+            #print_to_log('uid:','.'.join([k,kk]))
             assert kk[0].isdigit()
             assert type(vv) is dict
             for kkk,vvv in vv.items():
-                #print('3:','.'.join([k,kkk]))
+                #print_to_log('3:','.'.join([k,kkk]))
                 assert type(vvv) is not list or type(vvv) is not dict
                 if kkk in primary_keys:
                     print(f'"{kkk}" INT NOT NULL PRIMARY KEY,', file=f)
                 else:
                     print(f'"{kkk}" VARCHAR NULL,', file=f) # or NOT
         for kkk,vvv in vv.items():
-            #print(kkk,tables.keys())
+            #print_to_log(kkk,tables.keys())
             if kkk in tables:
                 print(f'-- list of VARCHAR', file=f)
                 print(f'FOREIGN KEY ("{kkk}") REFERENCES "{kkk}"(id) ON DELETE NO ACTION,', file=f)

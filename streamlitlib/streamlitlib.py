@@ -1,3 +1,14 @@
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO) # or DEBUG
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def print_to_log_info(*args):
+    print_to_log(logging.INFO, *args)
+def print_to_log_debug(*args):
+    print_to_log(logging.DEBUG, *args)
+def print_to_log(level, *args):
+    logging.log(level, ' '.join(str(arg) for arg in args))
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -304,7 +315,7 @@ def create_pdf(pdf_assets, title, output_filename=None):
             story.extend(markdown_to_paragraphs(a, styles))
         # Convert each DataFrame in the list to a reportlab table and add it to the story
         elif isinstance(a, pd.DataFrame):
-            print('a:',len(a),len(a.columns))
+            print_to_log_info('a:',len(a),len(a.columns))
             if len(a.columns) == 1:
                 a = pd.concat([a,pd.Series('',name='',index=a.index)],axis='columns') # workaround: 1 column dataframes error out so append a blank column
             story.append(dataframe_to_table(a.iloc[0:30,0:11])) # take only first 30 rows and 12 columns
