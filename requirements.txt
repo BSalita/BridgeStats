@@ -5,9 +5,15 @@ matplotlib
 pandas
 pyarrow
 requests
-seaborn
 sqlalchemy
 sqlalchemy_utils
 streamlit
 streamlit-aggrid
 streamlit-datalist
+seaborn
+reportlab
+markdown
+bs4
+requests
+aiohttp
+
