@@ -30,7 +30,7 @@ from collections import defaultdict
 import re
 from sklearn import preprocessing
 import matplotlib.pyplot as plt
-from IPython.display import display  # needed for VSCode
+#from IPython.display import display  # needed for VSCode
 
 # for double and single dummy calculations
 from endplay.dealer import generate_deals
