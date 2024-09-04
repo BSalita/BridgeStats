@@ -3,6 +3,7 @@
 duckdb
 matplotlib
 pandas
+polars
 pyarrow
 requests
 sqlalchemy
