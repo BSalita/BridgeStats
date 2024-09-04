@@ -17,6 +17,6 @@ markdown
 bs4
 aiohttp
 requests
-sklearn
+scikit-learn
 
 
