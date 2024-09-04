@@ -1,5 +1,6 @@
 # do not list libraries built into python. e.g. json, pickle, time
 # not sure why altair doesn't need to be listed. Maybe because it's only used internally in streamlit?
+endplay
 duckdb
 matplotlib
 pandas
