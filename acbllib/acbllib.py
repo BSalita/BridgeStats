@@ -100,7 +100,7 @@ def extract_club_games(htmls, acbl_url):
         df = pd.DataFrame(d[0])
         df.insert(0,'Club',cn)
         df.insert(1,'EventID','?')
-        hrefs = [acbl_url+link.get('href')[1:] for link in html_table.find_all('a', href=re.compile("^/club-results/details/\d*$"))]
+        hrefs = [acbl_url+link.get('href')[1:] for link in html_table.find_all('a', href=re.compile(r"^/club-results/details/\d*$"))]
         df.drop('Unnamed: 6', axis=1, inplace=True)
         df['ResultID'] = [result.rsplit('/', 1)[-1] for result in hrefs]
         df['ResultUrl'] = hrefs
