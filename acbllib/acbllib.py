@@ -1,4 +1,4 @@
-# functions which are specific to acbl; downloading acbl webpages, api calls.
+# this file confunctions which are specific to acbl; downloading acbl webpages, api calls.
 
 import logging
 logger = logging.getLogger(__name__)
@@ -353,6 +353,7 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
 def get_club_results_details_data(url):
     print_to_log_info('details url:',url)
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+    # todo: use some get...() for 'https://my.acbl.org/club-results/details/993420'
     response = requests.get(url, headers=headers)
     assert response.status_code == 200, [url, response.status_code]
 
@@ -371,6 +372,29 @@ def get_club_results_details_data(url):
 
     details_data = json.loads(data) # returns dict from json
     return details_data
+
+
+# def get_tournament_results_details_data(session_id, acbl_api_key):
+#     print_to_log_info('details url:',session_id)
+#     response = get_tournament_session_results(session_id, acbl_api_key)
+#     assert response.status_code == 200, [session_id, response.status_code]
+
+#     # soup = BeautifulSoup(response.content, "html.parser")
+
+#     # if soup.find('result-details-combined-section'):
+#     #     data = soup.find('result-details-combined-section')['v-bind:data']
+#     # elif soup.find('result-details'):
+#     #     data = soup.find('result-details')['v-bind:data']
+#     # elif soup.find('team-result-details'):
+#     #     return None # todo: handle team events
+#     #     data = soup.find('team-result-details')['v-bind:data']
+#     # else:
+#     #     return None # "Can't find data tag."
+#     # assert data is not None and isinstance(data,str) and len(data), [session_id, data]
+
+#     # details_data = json.loads(data) # returns dict from json
+#     details_data = response.json()
+#     return details_data
 
 
 def get_club_results_from_acbl_number(acbl_number):
@@ -400,9 +424,17 @@ def get_club_results_from_acbl_number(acbl_number):
     return my_results_details_data
 
 
+# todo: need to get the player's club game history without re-calling get_club_results_from_acbl_number(). Similar to tournament history/session results.
+def get_club_player_history(acbl_number):
+    return get_club_results_from_acbl_number(acbl_number)
+
+
 # get a single tournament session result
 def get_tournament_session_results(session_id, acbl_api_key):
-    headers = {'accept':'application/json', 'Authorization':acbl_api_key[len('Authorization: '):]}
+    headers = {
+        'accept': 'application/json', 
+        'Authorization': f'Bearer {acbl_api_key}'
+    }
     path = 'https://api.acbl.org/v1/tournament/session'
     query = {'id':session_id,'full_monty':1}
     params = urllib.parse.urlencode(query)
@@ -421,7 +453,10 @@ def get_tournament_sessions_from_acbl_number(acbl_number, acbl_api_key):
 
 # get a single player's tournament history
 def download_tournament_player_history(player_id, acbl_api_key):
-    headers = {'accept':'application/json', 'Authorization':acbl_api_key[len('Authorization: '):]}
+    headers = {
+        'accept': 'application/json', 
+        'Authorization': f'Bearer {acbl_api_key}'
+    }
     path = 'https://api.acbl.org/v1/tournament/player/history_query'
     query = {'acbl_number':player_id,'page':1,'page_size':200,'start_date':'1900-01-01'}
     params = urllib.parse.urlencode(query)
@@ -431,7 +466,10 @@ def download_tournament_player_history(player_id, acbl_api_key):
     json_responses = []
     while url:
         try:
+            print_to_log_info(f'url:{url}')
+            print_to_log_info(f'headers:{headers}')
             response = requests.get(url, headers=headers)
+            print_to_log_info(f'Status Code:{response.status_code}')
         except Exception as ex:
             print_to_log_info(f'Exception: count:{except_count} type:{type(ex).__name__} args:{ex.args}')
             if except_count > 5:
@@ -522,3 +560,110 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
                     f.write(json.dumps(session_json, indent=4))
         if sessions_count != sessions_total:
             print_to_log_info(f'Session count mismatch: {dirPath}: variance:{sessions_count-sessions_total}')
+
+# def post_with_auth_token(url, data, auth_token, headers=None):
+#     """
+#     Performs a POST request with authorization bearer token.
+    
+#     Args:
+#         url (str): The URL to send the POST request to
+#         data (dict): The data to send in the POST request body
+#         auth_token (str): The authorization bearer token
+#         headers (dict, optional): Additional headers to include. Defaults to None.
+    
+#     Returns:
+#         requests.Response: The response from the server
+#     """
+#     # Set up default headers
+#     default_headers = {
+#         'Authorization': f'Bearer {auth_token}',
+#         'Content-Type': 'application/json',
+#         'Accept': 'application/json'
+#     }
+    
+#     # Merge with any additional headers
+#     if headers:
+#         default_headers.update(headers)
+    
+#     # Make the POST request
+#     response = requests.post(
+#         url,
+#         json=data,
+#         headers=default_headers
+#     )
+    
+#     print_to_log_info(f'POST request to {url}')
+#     print_to_log_info(f'Status Code: {response.status_code}')
+    
+#     return response
+
+# # Example usage:
+# """
+# # Example of how to use the function:
+# url = 'https://api.example.com/endpoint'
+# data = {
+#     'key1': 'value1',
+#     'key2': 'value2'
+# }
+# auth_token = 'your_auth_token_here'
+
+# response = post_with_auth_token(url, data, auth_token)
+
+# if response.status_code == 200:
+#     result = response.json()
+#     print_to_log_info('Success:', result)
+# else:
+#     print_to_log_info('Error:', response.text)
+# """
+
+# def get_curl_command(url, data, auth_token, headers=None):
+#     """
+#     Generates a curl command string for making a POST request with authorization bearer token.
+    
+#     Args:
+#         url (str): The URL to send the POST request to
+#         data (dict): The data to send in the POST request body
+#         auth_token (str): The authorization bearer token
+#         headers (dict, optional): Additional headers to include. Defaults to None.
+    
+#     Returns:
+#         str: The curl command string
+#     """
+#     # Set up default headers
+#     default_headers = {
+#         'Authorization': f'Bearer {auth_token}',
+#         'Content-Type': 'application/json',
+#         'Accept': 'application/json'
+#     }
+    
+#     # Merge with any additional headers
+#     if headers:
+#         default_headers.update(headers)
+    
+#     # Build header arguments
+#     header_args = ' '.join([f'-H "{k}: {v}"' for k, v in default_headers.items()])
+    
+#     # Convert data to JSON string, escaping quotes
+#     json_data = json.dumps(data).replace('"', '\\"')
+    
+#     # Build the complete curl command
+#     curl_cmd = f'curl -X POST {header_args} -d "{json_data}" {url}'
+    
+#     return curl_cmd
+
+# # Example usage:
+# """
+# url = 'https://api.example.com/endpoint'
+# data = {
+#     'key1': 'value1',
+#     'key2': 'value2'
+# }
+# auth_token = 'your_auth_token_here'
+
+# curl_command = get_curl_command(url, data, auth_token)
+# print_to_log_info('Curl command:')
+# print_to_log_info(curl_command)
+
+# # The output would look like:
+# # curl -X POST -H "Authorization: Bearer your_auth_token_here" -H "Content-Type: application/json" -H "Accept: application/json" -d "{"key1":"value1","key2":"value2"}" https://api.example.com/endpoint
+# """

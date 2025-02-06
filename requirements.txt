@@ -11,7 +11,8 @@ sqlalchemy
 sqlalchemy_utils
 streamlit
 streamlit-aggrid
-streamlit-datalist
+#streamlit-datalist
+streamlit-extras
 seaborn
 reportlab
 markdown

@@ -59,8 +59,9 @@ ranked_suit_dict = {c:n for n,c in enumerate(ranked_suit)}
 max_bidding_level = 7
 tricks_in_a_book = 6
 # todo: rename to VulToDDSVul
-vul_d = {'None':0, 'Both':1, 'N_S':2, 'E_W':3} # dds vul encoding is weird
+vul_dds_d = {'None':0, 'Both':1, 'N_S':2, 'E_W':3} # dds vul encoding is weird
 vul_syms = ['None','N_S','E_W','Both']
+vul_sym_to_index_d = {'None':0, 'N_S':1, 'E_W':2, 'Both':3}
 vul_directions = [[],[0,2],[1,3],[0,1,2,3]]
 contract_types = ['Pass','Partial','Game','SSlam','GSlam']
 dealer_d = {'N':0, 'E':1, 'S':2, 'W':3}
@@ -75,6 +76,97 @@ contract_classes_dtype = pd.CategoricalDtype(contract_classes, ordered=False)
 declarer_direction_to_pair_direction = {'N':'NS','S':'NS','E':'EW','W':'EW'}
 # creates a dict all possible opening bids in auction order. key is npasses and values are opening bids.
 auction_order = [level+suit for level in '1234567' for suit in 'CDHSN']+['x','xx','p'] # todo: put into mlBridgeLib
+
+Direction_to_NESW_d = {
+    '0':'N',
+    '1':'E',
+    '2':'S',
+    '3':'W',
+    'north':'N',
+    'east':'E',
+    'south':'S',
+    'west':'W',
+    'North':'N',
+    'East':'E',
+    'South':'S',
+    'West':'W',
+    'N':'N',
+    'E':'E',
+    'S':'S',
+    'W':'W',
+    'n':'N',
+    'e':'E',
+    's':'S',
+    'w':'W',
+    None:None, # PASS
+    '':'' # PASS
+}
+
+Strain_to_CDHSN_d = {
+    'spades':'S',
+    'hearts':'H',
+    'diamonds':'D',
+    'clubs':'C',
+    'Spades':'S',
+    'Hearts':'H',
+    'Diamonds':'D',
+    'Clubs':'C',
+    'nt':'N',
+    '♠':'S',
+    '♥':'H',
+    '♦':'D',
+    '♣':'C',
+    'NT':'N',
+    'p':'PASS',
+    'Pass':'PASS',
+    'PASS':'PASS'
+}
+
+Vulnerability_to_Vul_d = {
+    '0': 'None',
+    '1': 'N_S',
+    '2': 'E_W',
+    '3': 'Both',
+    'None': 'None',
+    'N_S': 'N_S',
+    'E_W': 'E_W',
+    'N-S': 'N_S',
+    'E-W': 'E_W',
+    'Both': 'Both',
+    'NS': 'N_S',
+    'EW': 'E_W',
+    'All': 'Both',
+    'none': 'None',
+    'ns': 'N_S',
+    'ew': 'E_W',
+    'both': 'Both',
+}
+
+EpiVul_to_Vul_NS_Bool_d = {
+    0: False,
+    1: True,
+    2: False,
+    3: True,
+}
+
+EpiVul_to_Vul_EW_Bool_d = {
+    0: False,
+    1: False,
+    2: True,
+    3: True,
+}
+
+Dbl_to_x_d = {
+    'passed':'',
+    'doubled':'x',
+    'redoubled':'xx',
+    'p':'',
+    'd':'x',
+    'r':'xx',
+    'p':'',
+    'x':'x',
+    'xx':'xx'
+}
 
 def pd_options_display():
     # display options overrides
@@ -300,6 +392,10 @@ def validate_brs(brs):
     return True
 
 
+def LinToPBN(df):
+    return ['N:'+' '.join(['.'.join(list(map(lambda x: x[::-1], re.split('S|H|D|C', hh)))[1:]) for hh in r]) for r in df.select(pl.col(r'^Hand_[NESW]$')).rows()]
+    
+
 def brs_to_pbn(brs,void='',ten='T'):
     r = r'S(.*)H(.*)D(.*)C(.*)'
     rs = r*4
@@ -458,7 +554,7 @@ def LoTT_SHDC(ddmakes,lengths):
 
 
 def ContractType(tricks,suit):
-    if tricks < 7:
+    if tricks is None or tricks < 7:
         ct = 'Pass'
     elif tricks == 12:
         ct = 'SSlam'
@@ -497,10 +593,10 @@ def CategorifyContractTypeBySuit(ddmakes):
     return contract_types_d
 
 
-# Create columns of contract types by partnership by suit by contract. e.g. CT_NS_C_Game
+# Create columns of contract type booleans by partnership by suit by contract. e.g. CT_NS_C_Game
 def CategorifyContractTypeByDirection(df):
     contract_types_d = {}
-    cols = df.select(pl.selectors.matches(r'CT_(NS|EW)_[CDHSN]')).columns
+    cols = df.select(pl.col(r'^CT_(NS|EW)_[CDHSN]$')).columns
     for c in cols:
         for t in contract_types:
             #print_to_log_debug('CT:',c,t)
@@ -559,9 +655,10 @@ def ContractToScores(df,direction='Declarer_Direction',cache={}):
     assert 'NSEW' not in df and direction in df
     scores_l = []
     for bidlvl,bidsuit,direction,ivul,dbl in df[['BidLvl','BidSuit',direction,'iVul','Dbl']].to_numpy(): # rows: # convert df to list of tuples
-        if bidlvl is pd.NA or bidlvl == 0: # Contract of 'PASS' in which case BidSuit and Dbl are nulls.
+        if np.isnan(bidlvl) or bidlvl is None or bidlvl == 0: # Contract of 'PASS' in which case BidSuit and Dbl are nulls.
             scores = [[0]*14]
         elif (bidlvl,bidsuit,direction,ivul,dbl) in cache:
+
             scores = cache[(bidlvl,bidsuit,direction,ivul,dbl)]
         else:
             scores = scoresd[bidlvl-1,StrainSymToValue(bidsuit),DirectionSymToDealer(direction) in vul_directions[ivul],len(dbl),'NSEW'.index(direction)]
