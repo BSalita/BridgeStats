@@ -60,8 +60,8 @@ def create_query(database_name, groupby, having, limit, columns, clubs, players,
 
 def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
-    #st.set_page_config(layout="wide", initial_sidebar_state="expanded")
-    #streamlitlib.widen_scrollbars()
+    st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+    streamlitlib.widen_scrollbars()
 
     st.header(f"{pair_or_player.capitalize()} Statistics for ACBL {club_or_tournament.capitalize()} Pair Games")
     st.sidebar.header(f"Settings for {pair_or_player.capitalize()} Statistics")
