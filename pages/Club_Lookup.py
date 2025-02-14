@@ -1,23 +1,17 @@
-
 # todo:
 # 1. put club lookup into bridgestats.py (and elsewhere?) to validate club entries.
 
 import streamlit as st
 import pathlib
 import pyarrow.parquet as pq
-#import duckdb
 import pandas as pd
-#import matplotlib.pyplot as plt
 import altair as alt
 import time
 import bridgestatslib
 import sys
 sys.path.append(str(pathlib.Path.cwd().joinpath('streamlitlib')))  # global
 import streamlitlib # must be placed after sys.path.append. vscode re-format likes to move this to the top
-
-
-#st.set_page_config(layout="wide", initial_sidebar_state="expanded")
-#streamlitlib.widen_scrollbars()
+import polars as pl
 
 st.header("Lookup Club Information")
 st.sidebar.header("Settings for Club Lookup")
@@ -45,21 +39,30 @@ club_names = st.sidebar.text_input('Narrow search to these club names. Enter one
 club_names_l = club_names.split()
 club_names_regex = '|'.join(club_names_l)
 
-selected_df = acbl_club_df.convert_dtypes()
-selected_df = selected_df if len(clubs_regex)==0 else selected_df[selected_df['id'].astype('string').str.contains(clubs_regex,regex=True)]
-selected_df = selected_df if len(club_names_regex)==0 else selected_df[selected_df['name'].str.contains(club_names_regex,case=False,regex=True)]
+# Cast id to string for regex matching and ensure proper types
+selected_df = acbl_club_df.with_columns([
+    pl.col('id').cast(pl.Utf8)
+])
+
+# Apply filters based on user input
+selected_df = selected_df if len(clubs_regex)==0 else selected_df.filter(pl.col('id').str.contains(clubs_regex))
+selected_df = selected_df if len(club_names_regex)==0 else selected_df.filter(pl.col('name').str.contains(club_names_regex, ignore_case=True))
+
+# Collect the LazyFrames to get their sizes
+acbl_club_df_collected = acbl_club_df.collect()
+selected_df_collected = selected_df.collect()
 
 table, charts = st.tabs(["Data Table", "Charts"])
 
-st.caption(f"Database has {len(acbl_club_df)} rows. {len(selected_df)} rows selected.")
-if len(selected_df)==0:
+st.caption(f"Database has {acbl_club_df_collected.height} rows. {selected_df_collected.height} rows selected.")
+if selected_df_collected.height == 0:
     st.warning('No rows selected')
     st.stop()
 
 with table:
     with st.spinner(text="Creating data table ..."):
         start_time = time.time()
-        streamlitlib.ShowDataFrameTable(selected_df)
+        streamlitlib.ShowDataFrameTable(selected_df_collected)
         end_time = time.time()
         st.caption(f"Data table created in {round(end_time-start_time,2)} seconds.")
 

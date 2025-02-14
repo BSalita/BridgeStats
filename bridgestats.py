@@ -1,4 +1,3 @@
-
 # todo:
 # 1. is match point charting implemented and proper? something's .5%
 # 2. move club, player, pair validations to bridgestatslib.
@@ -12,11 +11,14 @@ import pathlib
 import re
 import pyarrow.parquet as pq
 import pandas as pd
+import polars as pl
 import altair as alt
 import matplotlib.pyplot as plt
 import time
 import bridgestatslib
 import sys
+import os
+import streamlitlib  # assumed import
 
 # todo: doesn't some variation of import chatlib.chatlib work instead of using sys.path.append such as exporting via __init__.py?
 #import acbllib.acbllib
@@ -185,8 +187,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             board_results_arrow = bridgestatslib.load_club_board_results(acbl_board_results_augmented_file)
         else:
             board_results_arrow = bridgestatslib.load_tournament_board_results(acbl_board_results_augmented_file)
-        board_results_len = board_results_arrow.num_rows
-        database_column_names = board_results_arrow.column_names
+        board_results_len = board_results_arrow.select(pl.count()).collect().item()
+        database_column_names = board_results_arrow.schema.keys() # todo: polars recommends .collect().schema.keys()
         #st.write(database_column_names)
         end_time = time.time()
         st.info(f"Data read completed in {round(end_time-start_time,2)} seconds. {board_results_len} rows read.")
@@ -287,7 +289,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
         query = st.text_input('Sql query', value=query,label_visibility='hidden', key=key_prefix+'-query') # either use initial query or let user change query
         any_position = bridgestatslib.duckdb_arrow_to_df(board_results_arrow, query) # quickly returns the pre-refresh selected_df from cache so keep it virgin-ish. Always use '...' not in selected_df to avoid re-modifing.
         if len(players):
-            selected_df = any_position[any_position['Declarer'].isin(players)]
+            selected_df = any_position.filter(pl.col('Declarer').is_in(players))
         #elif len(pairs)
         #    selected_df = any_position[any_position['Declarer'].isin(pairs)]
         else:
@@ -304,24 +306,41 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     with st.spinner(text="Preparing data columns ..."):
         start_time = time.time()
         if 'Players' not in selected_df:
-            selected_df['Players'] = selected_df['Declarer_Pair'].map(lambda x: [acbl_player_d[n] for n in x.split('_')])
-        col = selected_df.columns.get_loc('Declarer_Pair')+1
+            selected_df = selected_df.with_columns([
+                pl.col('Declarer_Pair').map_elements(lambda x: [acbl_player_d[n] for n in x.split('_')],return_dtype=pl.List(pl.Utf8)).alias('Players')
+            ])
         for player,i in [('Player1',0),('Player2',1)]: # column name, column index
             if player not in selected_df:
-                selected_df.insert(col+i,player,selected_df['Players'].map(lambda x: x[i]))
+                selected_df = selected_df.with_columns([
+                    pl.col('Players').map_elements(lambda x: x[i],return_dtype=pl.Utf8).alias(player)
+                ])
         if 'HandRecordBoard' in selected_df and 'board_record_string' not in selected_df:
-            selected_df['board_record_string'] = selected_df['HandRecordBoard'].map(hrd)
+            selected_df = selected_df.with_columns([
+                #pl.col("HandRecordBoard").replace_strict(hrd).alias('board_record_string')
+                pl.col('HandRecordBoard').map_elements(lambda x: hrd[x],return_dtype=pl.Utf8).alias('board_record_string')
+            ])
             # todo: looks like 2500 hrd contains 2500 hand records with superceded hand record ids. Dropping dups here, keeping latest. But this step should be done in hand_record_clean. 
-            selected_df = selected_df.sort_values(['board_record_string','Declarer','HandRecordBoard']).drop_duplicates(subset=['board_record_string','Declarer'],keep='last')
-        if 'Count' not in selected_df:
-            selected_df['Count'] = 0
+            selected_df = (selected_df
+                .sort(['board_record_string', 'Declarer', 'HandRecordBoard'])
+                .unique(
+                    subset=['board_record_string', 'Declarer'],
+                    maintain_order=True,
+                    keep='last'
+                )
+            )
+        if 'Count' not in selected_df.columns:
+            selected_df = selected_df.with_columns([
+                pl.lit(0).alias('Count')
+            ])
         # selected_df.drop([k for k,v in cb_d.items() if k in selected_df and not cb_d[k]],axis='columns',inplace=True)
-        selected_df.drop([col for col in selected_df if col.startswith('__')],axis='columns',inplace=True) # remove cols beginning with '__'
+        selected_df = selected_df.select([
+            col for col in selected_df.columns if not col.startswith('__')
+        ])
 
         if groupby[0] == 'Session':
-            grouped = selected_df.groupby('Session')
+            grouped = selected_df.group_by('Session')
         else:
-            grouped = selected_df.groupby('Declarer')
+            grouped = selected_df.group_by('Declarer')
         end_time = time.time()
         st.info(f"Data columns completed in {round(end_time-start_time,2)} seconds. Database has {board_results_len} rows. {selected_df_len} rows selected and aggregated.")
 
@@ -342,8 +361,8 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                     d[col] = []
                 for player in players:
                     d['Player'].append(player)
-                    player_df = any_position[any_position['Declarer'].eq(player)]
-                    d['Player_Name'].append(player_df['Declarer_Name'].iloc[-1])
+                    player_df = any_position.filter(pl.col('Declarer').eq(player))
+                    d['Player_Name'].append(player_df.select('Declarer_Name').tail(1).row(0)[0])
                     pos_total = 0
                     for pos in ['Declarer','OnLead','Dummy','NotOnLead']:
                         pos_sum = any_position[pos].eq(player).sum()
@@ -361,86 +380,203 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
                     assert pos_total == direction_total
                     d['Count'].append(pos_total)
                 st.info(f"Frequency of Player Positions")
-                df = pd.DataFrame(d)
-                streamlitlib.ShowDataFrameTable(df,round=2) #.sort_values(sort_column,ascending=False))
+                df = pl.DataFrame(d)
+                streamlitlib.ShowDataFrameTable(df,round=2)
+                del df
 
 
             if len(players) == 0 and len(pairs) == 0:
                 #df = grouped.agg({'Date':'first','Declarer_Pair':'first','Count':'count','Player1':'last','Player2':'last','Players':'last'}|{col:'mean' for col in sort_options}).reset_index()
-                df = grouped.agg({'Date':'first','Declarer':'first','Declarer_Name':'first','Count':'count','Player1':'last','Player2':'last'}|{col:'mean' for col in sort_options})#.reset_index()
-                table_df = df[df['Count'].ge(min_declares)].nlargest(top_ranked,sort_column)
+                df = grouped.agg([
+                    pl.col('Date').first().alias('Date'),
+                    pl.col('Declarer').first().alias('Declarer'),
+                    pl.col('Declarer_Name').first().alias('Declarer_Name'),
+                    pl.col('Count').count().alias('Count'),
+                    pl.col('Player1').last().alias('Player1'), # take a player's last used name
+                    pl.col('Player2').last().alias('Player2'), # take a player's last used name
+                    *[pl.col(col).mean().alias(col) for col in sort_options]
+                ])
+                table_df = df.filter(pl.col("Count") >= min_declares).sort(sort_column).head(top_ranked)
                 st.info(f"Table of {selected_df_len} rows sorted by {sort_column}. Top performing {len(table_df)} {pair_or_player}s shown.")
-                streamlitlib.ShowDataFrameTable(table_df,color_column=sort_column,round=2) #.sort_values(sort_column,ascending=False))
-                del table_df
+                streamlitlib.ShowDataFrameTable(table_df.sort(sort_column, descending=True), color_column=sort_column, round=2)
+                del df, table_df
 
             else:
 
                 # show table for each declarer of each {pair_or_player}
                 # todo: for pairs, output tables in Declarer_Pair order. Not Declarer_Name order.
-                declarer_grouped = selected_df.groupby('Declarer')
-                for k,player_indexes in declarer_grouped.groups.items():
-                    player_df = selected_df.loc[player_indexes]
-                    st.info(f"Boards played by {player_df['Declarer_Name'].iloc[-1]}. Sorted by {sort_column}. {len(player_df)} boards found.")
-                    streamlitlib.ShowDataFrameTable(player_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
+                declarers = selected_df.select('Declarer').unique(maintain_order=True)
+                for declarer in declarers.to_series():
+                    player_df = selected_df.filter(pl.col('Declarer').eq(declarer))
+                    st.info(f"Boards played by {player_df.select('Declarer_Name').tail(1).row(0)}. Sorted by {sort_column}. {player_df.height} boards found.")
+                    streamlitlib.ShowDataFrameTable(player_df.sort(sort_column, descending=True), color_column=sort_column, round=2)
 
-                table_df = declarer_grouped.agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options})
-                st.info(f"Means of boards played aggregated per player. Sorted by {sort_column}.")
-                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
-
-                table_df = selected_df.groupby('Session').agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}).reset_index()
+                table_df = selected_df.group_by('Session').agg([
+                        pl.col('Declarer_Pair').last().alias('Declarer_Pair'),
+                        pl.col('Declarer').last().alias('Declarer'),
+                        pl.col('Declarer_Name').last().alias('Declarer_Name'),
+                        pl.col('Count').count().alias('Count'),
+                        *[pl.col(col).mean().alias(col) for col in sort_options]
+                    ])
                 st.info(f"Means of boards played by {pair_or_player}s aggregated per session. Sorted by {sort_column}.")
-                streamlitlib.ShowDataFrameTable(table_df.sort_values(sort_column,ascending=False),color_column=sort_column,round=2)
+                streamlitlib.ShowDataFrameTable(table_df.sort(sort_column, descending=True), color_column=sort_column, round=2)
+                del table_df, declarers, player_df
 
-                del table_df
-
-                # if multiple pairs, display results of common boards.
-                # todo: create table of head-to-head results. For each declarer, show mean of declarer vs any-other-declarer for identical hand. i suppose this would be a cross table, x and y being declarers, intersection being mean?
+                # head to head analysis
                 if len(players) > 1 or len(pairs) > 1:
 
-                    # todo: use this? table_df = selected_df.groupby(['Date','board_record_string']).filter(lambda x: len(x) > 1)
-                    table_df = selected_df.groupby(['Date','Session','HandRecordBoard']).filter(lambda x: len(x) > 1)
-                    ngroup_name = 'ngroup'
-                    # todo: use this? table_df[ngroup_name] = table_df.groupby(['Date','board_record_string']).ngroup()
-                    table_df[ngroup_name] = table_df.groupby(['Date','Session','HandRecordBoard']).ngroup()
-                    st.info(f"Comparison of results of identical boards played by {pair_or_player}s. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by Date, Session, HandRecordBoard, Declarer_Name.")
-                    streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Player1','Player2']),color_column=sort_column,ngroup_name=ngroup_name,round=2)
+                    # 1. Count rows per group.
+                    group_counts = selected_df.group_by(["Date", "Session", "HandRecordBoard"]).agg(
+                        pl.count().alias("group_count")
+                    )
 
-                    st.info(f"Comparison of results of identical boards played by {pair_or_player}s aggregated per session. {table_df[ngroup_name].max()+1} boards found in {table_df['Session'].nunique()} sessions. Sorted by {sort_column}.")
-                    # todo: use Player1,N,E not Declarer/Declarer_Name
-                    table_df = table_df.groupby('Declarer').agg({'Declarer_Pair':'last','Declarer':'last','Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}) #.reset_index()
-                    if sort_column in table_df:
-                        table_df.sort_values(sort_column,ascending=False,inplace=True)
+                    # 2. Join the counts back to the original DataFrame.
+                    table_df = selected_df.join(group_counts, on=["Date", "Session", "HandRecordBoard"])
+
+                    # 3. Filter to keep only groups with more than 1 row.
+                    table_df = table_df.filter(pl.col("group_count") > 1)
+
+                    # 4. Optionally, drop the helper column.
+                    table_df = table_df.drop("group_count")
+                    
+                    # 5. Create group key and ngroup
+                    table_df = table_df.with_columns(
+                        pl.concat_str(["Date", "Session", "HandRecordBoard"], separator="_").alias("group_key")
+                    )
+                    group_keys = table_df.select("group_key").sort("group_key").unique(maintain_order=True).with_row_count("ngroup")
+                    table_df = table_df.join(group_keys, on="group_key").drop("group_key")
+
+                    # 6. First sort within each group by Declarer_Name
+                    table_df = table_df.sort(["Declarer_Name"]).group_by("ngroup").agg([
+                        pl.all().sort_by("Declarer_Name")
+                    ]).explode(pl.all().exclude("ngroup"))
+
+                    # 7. Then sort the entire DataFrame by ngroup and move ngroup to last column
+                    table_df = (table_df
+                                .sort("ngroup")
+                                .select([col for col in table_df.columns if col != "ngroup"] + ["ngroup"]))
+
+                    n_boards = table_df.select(pl.col("ngroup").max()).item() + 1
+                    n_sessions = table_df.select(pl.col("Session")).n_unique()
+
+                    st.info(
+                        f"Comparison of results of identical boards played by {pair_or_player}s. "
+                        f"{n_boards} boards found in {n_sessions} sessions. Sorted by Date, Session, HandRecordBoard, Declarer_Name."
+                    )
+
+                    streamlitlib.ShowDataFrameTable(table_df, color_column=sort_column, ngroup_name="ngroup", round=2, key=f"polars_identical_boards_table")
+
+                    # 7. Aggregate per session (grouping by 'Declarer')
+                    st.info(
+                        f"Comparison of results of identical boards played by {pair_or_player}s aggregated per session. "
+                        f"{n_boards} boards found in {n_sessions} sessions. Sorted by {sort_column}."
+                    )
+
+                    # 8. Build aggregation expressions:
+                    agg_exprs = [
+                        pl.col("Declarer_Pair").last().alias("Declarer_Pair"),
+                        #pl.col("Declarer").last().alias("Declarer"),
+                        pl.col("Declarer_Name").last().alias("Declarer_Name"),
+                        pl.col("Count").count().alias("Count"),
+                    ] + [pl.col(col).mean().alias(col) for col in sort_options]
+
+                    table_df_grouped = table_df.group_by("Declarer").agg(agg_exprs)
+
+                    # 9. Sort the aggregated result.
+                    if sort_column in table_df_grouped.columns:
+                        table_df_grouped = table_df_grouped.sort(sort_column, descending=True)
                     else:
-                        table_df.sort_values(['Player1','Player2'],ascending=True,inplace=True)
-                    streamlitlib.ShowDataFrameTable(table_df,color_column=sort_column,round=2)
+                        table_df_grouped = table_df_grouped.sort(["Player1", "Player2"])
 
-                    if pair_or_player == 'pair': # head-to-head comparison of identical boards played between pairs.
-                        hrb_grouped = selected_df.groupby('HandRecordBoard')
-                        h2h = {}
-                        for k,hrb_indexes in hrb_grouped.groups.items():
-                            for hrb1 in hrb_indexes:
-                                r1 = selected_df.loc[hrb1]
-                                d1 = r1['Declarer']
-                                n1 = r1['Declarer_Name']
-                                for hrb2 in hrb_indexes:
-                                    r2 = selected_df.loc[hrb2]
-                                    d2 = r2['Declarer']
-                                    n2 = r2['Declarer_Name']
-                                    if d1 != d2:
-                                        h2h[(k,d1,d2,n1,n2)] = r1
-                        if len(h2h):
-                            table_df = pd.DataFrame(h2h.values())
-                            table_df.insert(0,'H2H',['_'.join([k[1],k[2]]) for k,v in h2h.items()])
-                            table_df.insert(0,'H2H_sorted',['_'.join([k[1],k[2]] if k[1]<k[2] else [k[2],k[1]]) for k,v in h2h.items()])
-                            table_df = table_df.groupby('H2H').agg({'Declarer_Name':'last','Count':'count'}|{col:'mean' for col in sort_options}|{'H2H_sorted':'last'}).reset_index()
-                            ngroup_name = 'ngroup'
-                            table_df[ngroup_name] = table_df.groupby('H2H_sorted').ngroup()
-                            st.info(f"Comparison of head-to-head results of identical boards played between pairs aggregated per boards. Sorted by Declarer_Name.")
-                            streamlitlib.ShowDataFrameTable(table_df.sort_values([ngroup_name,'Declarer_Name']),color_column=sort_column,ngroup_name=ngroup_name,round=2)
+                    streamlitlib.ShowDataFrameTable(table_df_grouped, color_column=sort_column, round=2, key=f"polars_aggregated_per_session_table")
 
-                    del table_df
+                    del table_df, table_df_grouped, group_counts, group_keys
 
-            # del selected_df
+                    # 10. Head-to-head comparison for pairs.
+                    if pair_or_player == 'pair':
+
+                        # Get unique columns to avoid duplicates in join
+                        unique_columns = ["Date", "Session", "HandRecordBoard", "Declarer_Pair"]
+                        sort_columns = unique_columns + ["Declarer_Name"]
+
+                        # Step 1: Remove duplicates based on the columns of interest,
+                        #         maintaining the order determined by sort_columns.
+                        unique_df = selected_df.sort(sort_columns).unique(unique_columns, maintain_order=True)
+
+                        # Step 2: Compute group counts per ["Date", "Session", "HandRecordBoard"].
+                        group_counts = unique_df.group_by(["Date", "Session", "HandRecordBoard"]).agg(
+                            pl.count().alias("group_count"),
+                            pl.col("Declarer").alias("Declarers")
+                        )
+
+                        # Step 3: Filter out groups with only one row.
+                        valid_groups = group_counts.filter(pl.col("group_count") > 1).select(["Date", "Session", "HandRecordBoard", 'Declarers', 'group_count'])
+
+                        # Step 4: Keep only rows from groups with more than one row.
+                        filtered_df = unique_df.join(valid_groups, on=["Date", "Session", "HandRecordBoard"], how="inner")
+
+                        # Step 5: Self-join to pair up all declarers
+                        h2h_df = (
+                            filtered_df.join(
+                                filtered_df.select(["HandRecordBoard", "Declarer", "Declarer_Name"] + sort_options),
+                                on="HandRecordBoard",
+                                suffix="_compare"
+                            )
+                            # Filter out self-matches and keep only unique pairs
+                            .filter(pl.col("Declarer") != pl.col("Declarer_compare"))
+                            .unique(subset=["HandRecordBoard", "Declarer", "Declarer_compare"], maintain_order=True)
+                        )
+
+                        # Step 6: Create columns for the head-to-head key
+                        h2h_df = h2h_df.with_columns([
+                            (pl.col("Declarer") + "_" + pl.col("Declarer_compare")).alias("H2H"),
+                            (
+                                pl.when(pl.col("Declarer") < pl.col("Declarer_compare"))
+                                .then(pl.col("Declarer") + "_" + pl.col("Declarer_compare"))
+                                .otherwise(pl.col("Declarer_compare") + "_" + pl.col("Declarer"))
+                        ).alias("H2H_sorted")
+                        ])
+
+                        # Step 7: Group by declarer pairs and aggregate
+                        h2h_df = h2h_df.group_by(["H2H", "H2H_sorted"]).agg([
+                            pl.col("HandRecordBoard").count().alias("Count"),
+                            pl.col("Declarer").first().alias("Declarer1"),
+                            pl.col("Declarer_compare").first().alias("Declarer2"),
+                            pl.col("Declarer_Name").first().alias("Declarer_Name"),
+                            pl.col("Declarer_Name_compare").first().alias("Declarer_Name2"),
+                            *[pl.col(col).mean().alias(col) for col in sort_options]
+                        ])
+
+                        # Step 8: Sort and create ngroup
+                        h2h_df = (
+                            h2h_df
+                            # Create a list of names for each group
+                            .with_columns([
+                                pl.concat_list([pl.col("Declarer_Name"), pl.col("Declarer_Name2")]).alias("names")
+                            ])
+                            # Sort names within each list and join them
+                            .with_columns([
+                                pl.col("names").map_elements(lambda x: "_".join(sorted(x))).alias("group_key")
+                            ])
+                            # Sort by the group key and Declarer_Name
+                            .sort(["group_key", "Declarer_Name"])
+                            # Create ngroup based on group key
+                            .with_columns([
+                                pl.col("group_key").rank("dense").alias("ngroup")
+                            ])
+                            .drop(["names", "group_key"])
+                            .select([
+                                col for col in h2h_df.columns 
+                                if col not in ["ngroup", "H2H_sorted", "Declarer1", "Declarer2", "Declarer_Name2"]
+                            ] + ["Declarer1", "Declarer2", "Declarer_Name2", "H2H_sorted", "ngroup"])
+                        )
+
+                        st.info(
+                            "Comparison of head-to-head results of identical boards played between pairs aggregated per boards. Sorted by Declarer_Name."
+                        )
+                        streamlitlib.ShowDataFrameTable(h2h_df, color_column=sort_column, ngroup_name="ngroup", round=2)
+                        del h2h_df, valid_groups, filtered_df, unique_df, group_counts
+
             end_time = time.time()
             st.info(f"Data table created in {round(end_time-start_time,2)} seconds.")
 
@@ -454,7 +590,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             st.write(f"Acronyms: BidLvl is Contract Level, BidSuit is Contract Suit, ContractType is Type of Contract (passed-out, partial, game, small slam, grand slam), Dbl is Doubled, MP is Player's Master Points Pct is Match Point Percent")
 
             # removed feature because of annoying issue with new query of using groupby list but no special_columns translation.
-            # declarer_groups = selected_df.groupby(groupby).groups
+            # declarer_groups = selected_df.group_by(groupby).groups
             # if len(declarer_groups) <= 10: # if 10 or fewer, revert to unaggregated.
                 # Non-aggregated
                 # query = create_query(database_name, '', '', 0, ','.join(groupby+selected_charts), clubs, players, pairs, min_declares, stat_column, minimum_mps, maximum_mps, start_date, end_date, 'acbl_player_df')
@@ -463,8 +599,23 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             #    selected_df = selected_df.sample(1000)
             bridgestatslib.ShowCharts(selected_df,selected_charts,stat_column)
 
-            bridgestatslib.ShowCharts(selected_df.filter(regex='(Pct|Pct_Max)$'),[','.join(selected_df.filter(regex='(Pct|Pct_Max)$'))]) # temp - put into selected_charts
-            bridgestatslib.ShowCharts(selected_df.filter(regex='Pct.*Diff'),[','.join(selected_df.filter(regex='Pct.*Diff'))]) # temp - put into selected_charts
+            # Get column names that match the pattern
+            pct_columns = selected_df.select(pl.col(r'^.*(Pct|Pct_Max)$')).columns
+
+            # Use the column names in ShowCharts
+            bridgestatslib.ShowCharts(
+                selected_df.select(pl.col(r'^.*(Pct|Pct_Max)$')),
+                [','.join(pct_columns)]  # Join the column names, not the Series
+            )
+
+            # Get column names that match the pattern
+            diff_columns = selected_df.select(pl.col(r'^.*Pct.*Diff.*$')).columns
+
+            # Use the column names in ShowCharts
+            bridgestatslib.ShowCharts(
+                selected_df.select(pl.col(r'^.*Pct.*Diff.*$')),
+                [','.join(diff_columns)]  # Join the column names, not the Series
+            )
 
             end_time = time.time()
             st.info(f"Charts created in {round(end_time-start_time,2)} seconds.")

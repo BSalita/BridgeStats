@@ -1,4 +1,3 @@
-
 # todo:
 # 1. move Date to first column or so.
 # 2. data table columns need to be ordered by importance. possibly eliminate some unimportant columns.
@@ -8,7 +7,7 @@ import pathlib
 import pickle
 import pyarrow.parquet as pq
 import duckdb
-import pandas as pd
+import polars as pl
 import altair as alt
 import matplotlib.pyplot as plt
 import time
@@ -32,8 +31,8 @@ def create_query(database_name, brs_regex, sample_size=100000):
  
 def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
 
-    #st.set_page_config(layout="wide", initial_sidebar_state="expanded")
-    #streamlitlib.widen_scrollbars()
+    st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+    streamlitlib.widen_scrollbars()
 
     st.header(f"Hand Record Statistics for ACBL {club_or_tournament.capitalize()} Pair Games")
     st.sidebar.header("Settings for Hand Record Statistics")
@@ -59,9 +58,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
     # select using regex
     brs_regex = st.sidebar.text_input('Restrict results to boards matching this regex:', value='', key=key_prefix+'_HandRecord-brs', help='Example: ^SAK.*$').strip() # e.g. ^SAK.*$
 
-    #sample_percentage = st.sidebar.number_input('Enter sample size percentage (default 1):', value=1., min_value=.001, max_value=100.)
-    #sample_percentage = 1.
-    table_display_limit = 100 # streamlit gets choked up pretty quickly. need to limit table to 100. todo: check if this has chatnged.
+    table_display_limit = 100 # streamlit gets choked up pretty quickly. need to limit table to 100.
     sample_size = 100000
 
     st.warning('Table and charts take up to 30 to 60 seconds to render.')
@@ -73,52 +70,62 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             hand_records_arrow = bridgestatslib.load_club_hand_records(acbl_hand_records_augmented_file)
         else:
             hand_records_arrow = bridgestatslib.load_tournament_hand_records(acbl_hand_records_augmented_file)
-        hand_records_len = hand_records_arrow.num_rows
-        database_column_names = hand_records_arrow.column_names
+        hand_records_len = hand_records_arrow.collect().height
+        database_column_names = hand_records_arrow.collect().columns
         end_time = time.time()
         st.info(f"Data read completed in {round(end_time-start_time,2)} seconds. {hand_records_len} rows read.")
 
     with st.spinner(text="Selecting database rows ..."):
         start_time = time.time()
         query = create_query(database_name, brs_regex, sample_size)
-        query = st.text_input('Sql query',value=query,label_visibility='hidden', key=key_prefix+'_HandRecord-query') # either use initial query or let user change query
-        selected_df = duckdb.arrow(hand_records_arrow).query('hand_records', query).to_df() # todo: can this be cached?
-        selected_df = selected_df.drop_duplicates(subset="board_record_string") # using only unique hands (unique board_record_string) otherwise the dups will be double counted.
-        uniques = len(selected_df)
-        #selected_df = selected_df.sample(sample_size) # need to sample because of limited memory and computation overhead for tables and charts.
-        # todo: put this filtering into create_query?
-        selected_df = selected_df[selected_df['Date'].between(start_date,end_date)]
-        selected_df_len = len(selected_df)
+        query = st.text_input('Sql query',value=query,label_visibility='hidden', key=key_prefix+'_HandRecord-query')
+        
+        # Convert DuckDB result to Polars DataFrame - now collecting the LazyFrame first
+        selected_df = pl.from_arrow(
+            duckdb.arrow(hand_records_arrow.collect()).query('hand_records', query).arrow()
+        )
+        
+        # Drop duplicates based on board_record_string
+        selected_df = selected_df.unique(subset=["board_record_string"])
+        uniques = selected_df.height
+        
+        # Filter by date range
+        selected_df = selected_df.filter(
+            (pl.col('Date') >= start_date) & (pl.col('Date') <= end_date)
+        )
+        selected_df_len = selected_df.height
         end_time = time.time()
-        st.info(f"Query completed in {round(end_time-start_time,2)} seconds. Database has {hand_records_len} rows. Sampling {sample_size} random rows.  {uniques} unique hands found.")
+        st.info(f"Query completed in {round(end_time-start_time,2)} seconds. Database has {hand_records_len} rows. Sampling {sample_size} random rows. {uniques} unique hands found.")
 
     # prepare data columns
-    selected_df.drop([col for col in selected_df if col.startswith('__')],axis='columns',inplace=True) # remove cols beginning with '__'
-    for col in selected_df.select_dtypes('float'): # rounding or {:,.2f} only works on float64!
-        selected_df[col] = selected_df[col].astype('float64').round(2)
-
-    #print(list(selected_df.columns))
+    # Remove columns starting with '__'
+    selected_df = selected_df.select([
+        col for col in selected_df.columns if not col.startswith('__')
+    ])
+    
+    # Round float columns to 2 decimal places
+    float_cols = [col for col in selected_df.columns if selected_df[col].dtype in [pl.Float32, pl.Float64]]
+    selected_df = selected_df.with_columns([
+        pl.col(col).round(2) for col in float_cols
+    ])
 
     table, chart = st.tabs(["Data Table", "Charts"])
 
     with table:
-
         with st.spinner(text="Creating data table ..."):
             start_time = time.time()
-            #table_df = selected_df.sample(table_display_limit)duckdb.query(f"SELECT * FROM selected_df USING SAMPLE {table_display_limit} ORDER BY {sort_column}").to_df().sort_index() # todo: can this be cached?
-            table_df = selected_df.sample(table_display_limit).sort_index()
-            st.text(f"Table of Hand Records. {selected_df_len} random rows selected. Table display limited to {len(table_df)} random rows.")
+            # Sample rows and sort
+            table_df = selected_df.sample(n=min(table_display_limit, selected_df.height))
+            st.text(f"Table of Hand Records. {selected_df_len} random rows selected. Table display limited to {table_df.height} random rows.")
             streamlitlib.ShowDataFrameTable(table_df)
             del table_df
             end_time = time.time()
             st.info(f"Data table created in {round(end_time-start_time,2)} seconds.")
 
     with chart:
-
         with st.spinner(text="Creating Charts"):
             start_time = time.time()
 
-            # using st.write because it display in a suitable font, especially font size.
             st.write(f"Abbreviations for Chart Type: CT is Contract Type (passed-out, partial, game, small slam, grand slam), DD is Double Dummy, DP is Distribution Points, HCP is High Card Points, LoTT is Law of Total Tricks, QT is Quick Tricks, SL is Suit Length")
             st.write(f"Abbreviations for individual directions: N is North, S is South, E is East W is West.")
             st.write(f"Abbreviations for pair direction: NS is North-South, EW is East-West.")
@@ -126,7 +133,7 @@ def Stats(club_or_tournament, pair_or_player, chart_options, groupby):
             st.write(f"For example: DD_N_N is Double Dummy - North - No-Trump")
 
             st.text(f"{selected_df_len} random rows selected.")
-            bridgestatslib.ShowCharts(selected_df,selected_charts)
+            bridgestatslib.ShowCharts(selected_df, selected_charts)
             
             end_time = time.time()
             st.info(f"Charts created in {round(end_time-start_time,2)} seconds.")

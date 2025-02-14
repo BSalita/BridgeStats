@@ -15,6 +15,84 @@ import polars as pl
 import matplotlib.pyplot as plt
 import seaborn as sns
 from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode, ColumnsAutoSizeMode, AgGridTheme, JsCode
+import threading
+import time
+import queue
+
+
+@st.cache_resource
+def safe_resource():
+    return {
+        'lock': threading.Lock(),
+        'waiting_count': 0,
+        'queue': queue.Queue()  # FIFO queue
+    }
+
+def perform_queued_work(df, work_fn, work_description="Work", **work_kwargs):
+    """
+    Perform work in a FIFO queue with progress tracking.
+    
+    Args:
+        df: DataFrame to process
+        work_fn: Callable that takes df and **work_kwargs as arguments
+        work_description: Description of work for status messages
+        **work_kwargs: Additional arguments to pass to work_fn
+    """
+    # Create empty placeholders
+    status_placeholder = st.empty()
+    queue_placeholder = st.empty()
+
+    acquired = False
+    resources = safe_resource()
+    mutex = resources['lock']
+    wait_queue = resources['queue']
+    my_token = object()  # Unique token for this session
+
+    try:
+        # Add ourselves to the queue and increment counter
+        with threading.Lock():
+            wait_queue.put(my_token)
+            resources['waiting_count'] += 1
+            
+        while not acquired:
+            # Only try to acquire if we're at the front of the queue
+            if wait_queue.queue[0] == my_token:
+                acquired = mutex.acquire(timeout=2)
+                if acquired:
+                    wait_queue.get()  # Remove ourselves from queue
+            
+            if not acquired:
+                status_placeholder.info(f"{work_description} is queued for processing. Please wait...")
+                position = list(wait_queue.queue).index(my_token) + 1
+                queue_placeholder.info(f"Your position in queue: {position} of {resources['waiting_count']}")
+                time.sleep(1)
+
+        # Decrement waiting count when acquired
+        with threading.Lock():
+            resources['waiting_count'] -= 1
+            
+        status_placeholder.empty()
+        queue_placeholder.empty()
+        progress = st.progress(0)
+        
+        # Call the work function with progress bar and other arguments
+        df = work_fn(df, progress=progress, **work_kwargs)
+
+    finally:
+        if acquired:
+            mutex.release()
+        # Clean up queue if we're still in it
+        with threading.Lock():
+            if my_token in wait_queue.queue:
+                # Remove our token (this is a bit hacky but necessary for cleanup)
+                items = list(wait_queue.queue)
+                items.remove(my_token)
+                wait_queue.queue.clear()
+                for item in items:
+                    wait_queue.put(item)
+                resources['waiting_count'] -= 1
+
+    return df
 
 
 def move_focus():

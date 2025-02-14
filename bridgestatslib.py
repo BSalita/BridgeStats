@@ -1,4 +1,3 @@
-
 # todo:
 
 import streamlit as st
@@ -6,6 +5,7 @@ import pathlib
 import pickle
 import pyarrow.parquet as pq
 import duckdb
+import polars as pl
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
@@ -17,60 +17,63 @@ import streamlitlib # must be placed after sys.path.append. vscode re-format lik
 
 @st.cache_resource()
 def load_club_hand_records(filename):
-    hand_records_arrow = pq.read_table(filename)
-    return hand_records_arrow
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_club_board_results(filename):
-    arrow_table = pq.read_table(filename)
-    return arrow_table
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_club_player_d(filename):
-    return pd.read_pickle(filename)
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 
 @st.cache_resource()
 def load_club_hand_records_d(filename):
-    return pd.read_pickle(filename)
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 
 @st.cache_resource()
 def load_tournament_hand_records(filename):
-    return pq.read_table(filename)
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_tournament_board_results(filename):
-    return pq.read_table(filename)
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_player_info_df(filename):
-    return pd.read_parquet(filename)
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_club_df(filename):
-    return pd.read_parquet(filename)
+    return pl.scan_parquet(filename)
 
 
 @st.cache_resource()
 def load_tournament_player_d(filename):
-    return pd.read_pickle(filename)
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 
 @st.cache_resource()
 def load_tournament_hand_records_d(filename):
-    return pd.read_pickle(filename)
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 
-# uncacheable due to arrow_table. just leave as a helper function.
-#@st.cache_resource()
-def duckdb_arrow_to_df(_arrow_table, query):
-    return duckdb.arrow(_arrow_table).query('arrow_table', query).to_df()
+# Helper function for DuckDB queries
+def duckdb_arrow_to_df(board_results_arrow, query):
+    # Convert LazyFrame to Arrow table first
+    arrow_table = board_results_arrow.collect().to_arrow()
+    return pl.from_arrow(duckdb.arrow(arrow_table).query('arrow_table', query).arrow())
 
 
 # todo: is this obsolete? Seems to freeze or slow webpages.
@@ -107,67 +110,93 @@ def CreateCheckBoxesFromColumns(column_names,mandatory_columns,special_columns,s
 
 # todo: remove stat_column in favor of column_filter?
 def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
-
+    # Convert polars DataFrame to pandas for plotting
+    # This is temporary until we implement native polars plotting
+    selected_df_pd = selected_df.to_pandas()
+    
     available_charts = []
     for chart in selected_charts:
         stat_column_split = chart.replace(' ','').split(',')
-        if all([col in selected_df for col in stat_column_split]):
+        if all([col in selected_df.columns for col in stat_column_split]):
             available_charts.append(stat_column_split)
 
     selected_df_len = len(selected_df)
-    if 'Declarer' in selected_df:
-        declarer_groups = selected_df.groupby(['Declarer','Declarer_Name']).groups
+    if 'Declarer' in selected_df.columns:
+        declarer_groups = (
+            selected_df
+            .group_by(['Declarer', 'Declarer_Name'])
+            .agg(pl.count())
+        )
         st.info(f"Selected: Unique declarers:{len(declarer_groups)} rows:{selected_df_len} charts:{available_charts}")
     else:
-        declarer_groups = {}
+        declarer_groups = pl.DataFrame()
 
     figsize = (26,2)
-    if 0 < len(declarer_groups) <= 10: # if 10 or fewer declarers, revert to unaggregated.
-
-        # create charts with x-axis having a column for each player
+    if 0 < len(declarer_groups) <= 10:
+        # For small number of declarers, show unaggregated data
         for stat_column_split in available_charts:
-            if len(stat_column_split) == 1: # todo: implement charts having more than one x axis column. e.g. HCP_.*
+            if len(stat_column_split) == 1:
                 players_d = {}
                 for col in stat_column_split:
-                     for k,v in declarer_groups.items():
-                        s = selected_df.loc[v][col]
-                        vc = s.value_counts(normalize=True).sort_index() # initialize here to suppress ide warning
-                        if pd.api.types.is_float_dtype(s):
+                    for row in declarer_groups.iter_rows(named=True):
+                        declarer, declarer_name = row['Declarer'], row['Declarer_Name']
+                        s = selected_df.filter(pl.col('Declarer') == declarer)[col]
+                        
+                        # Convert to pandas for value_counts operation
+                        s_pd = s.to_pandas()
+                        if pl.Series(s).dtype in [pl.Float32, pl.Float64]:
                             for r in [2,1,0,-1]:
-                                vc = s.astype('float64').round(r).value_counts(normalize=True).sort_index()
-                                if len(vc) <= 100: # try more rounding if too crowded.
+                                vc = s_pd.round(r).value_counts(normalize=True).sort_index()
+                                if len(vc) <= 100:
                                     break
-                        players_d['('+','.join([str(k[0]),k[1],str(len(vc))])+')'] = vc # caution: tricky to form str.
+                        else:
+                            vc = s_pd.value_counts(normalize=True).sort_index()
+                        players_d[f'({declarer},{declarer_name},{len(vc)})'] = vc
+                
                 title = f"Frequency Percentage of {', '.join(stat_column_split)} {', '.join(players_d.keys())}"
                 ax = pd.DataFrame(players_d).plot(kind='bar',figsize=figsize,title=title)
                 ax.legend(title='(Player Number, Player Name, Rows Found, Mean)')
             else:
-                # ax = selected_df.filter(regex=column_filter).hist(figsize=figsize)
-                ax = selected_df[stat_column_split].hist(figsize=figsize)
-            st.pyplot(plt,clear_figure=True) # todo: remove plt
-            
+                selected_cols = selected_df.select(stat_column_split).to_pandas()
+                ax = selected_cols.hist(figsize=figsize)
+            st.pyplot(plt,clear_figure=True)
     else:
-    
-         for stat_column_split in available_charts:
-                                    
-            if len(stat_column_split) == 3: # 3 variable heat map
-                cross_table = selected_df.groupby([stat_column_split[0],stat_column_split[1]])[stat_column_split[2]].mean().unstack()
+        for stat_column_split in available_charts:
+            if len(stat_column_split) == 3:
+                # 3 variable heat map
+                cross_table = (
+                    selected_df
+                    .group_by([stat_column_split[0], stat_column_split[1]])
+                    .agg(pl.col(stat_column_split[2]).mean())
+                    .collect()
+                    .pivot(
+                        values=stat_column_split[2],
+                        index=stat_column_split[0],
+                        columns=stat_column_split[1]
+                    )
+                    .to_pandas()
+                )
                 streamlitlib.plot_heatmap(cross_table, zlabel=stat_column_split[2])
                 del cross_table
-
             else:
-
                 d = {}
                 for col in stat_column_split:
-                    if pd.api.types.is_float_dtype(selected_df[col]):
-                        # todo: this is a kludge to limit the number of x axis labels. Attempting to maximize performance and precision and minimize overly crowded x axis.
+                    s = selected_df.select(col).to_pandas()[col]
+                    if pd.api.types.is_float_dtype(s):
                         for r in [2,1,0,-1]:
-                            d[col] = selected_df[col].astype('float64').round(r).value_counts(normalize=True).sort_index()
-                            if len(d[col]) <= 100: # try more rounding if too crowded.
+                            d[col] = s.round(r).value_counts(normalize=True).sort_index()
+                            if len(d[col]) <= 100:
                                 break
                     else:
-                        d[col] = selected_df[col].value_counts(normalize=True).sort_index()
-                ax = pd.DataFrame(d).plot(kind='bar',xlabel=stat_column_split,ylabel=f"Percentage Frequency",title=f"Frequency of {', '.join(d.keys())} values. {selected_df_len} observations.",figsize=figsize)
+                        d[col] = s.value_counts(normalize=True).sort_index()
+                
+                ax = pd.DataFrame(d).plot(
+                    kind='bar',
+                    xlabel=stat_column_split,
+                    ylabel="Percentage Frequency",
+                    title=f"Frequency of {', '.join(d.keys())} values. {selected_df_len} observations.",
+                    figsize=figsize
+                )
                 st.pyplot(plt,clear_figure=True)
                 del d
                 
