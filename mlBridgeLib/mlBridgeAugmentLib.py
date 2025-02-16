@@ -1482,7 +1482,7 @@ def AugmentACBLHandRecords(df,hrs_d):
 
 def Perform_Legacy_Renames(df):
 
-    df = df.with_columns(
+    df = df.with_columns([
         #pl.col('Section').alias('section_name'), # will this be needed for acbl?
         pl.col('N').alias('Player_Name_N'),
         pl.col('S').alias('Player_Name_S'),
@@ -1490,8 +1490,7 @@ def Perform_Legacy_Renames(df):
         pl.col('W').alias('Player_Name_W'),
         pl.col('Declarer_Name').alias('Name_Declarer'),
         pl.col('Declarer_ID').alias('Number_Declarer'), #  todo: rename to 'Declarer_ID'?
-        # todo: rename to 'Declarer_Pair_Direction'
-        pl.when(pl.col('Declarer_Direction').is_in(['N','S'])).then(pl.lit('NS')).otherwise(pl.lit('EW')).alias('Pair_Declarer_Direction'),
+        pl.col('Declarer_Direction').replace_strict(mlBridgeLib.PlayerDirectionToPairDirection).alias('Declarer_Pair_Direction'),
 
         # EV legacy renames
         pl.col('EV_MaxCol').alias('SDContract_Max'), # Pair direction invariant.
@@ -1505,23 +1504,7 @@ def Perform_Legacy_Renames(df):
         (pl.col('EV_EW_Max')-pl.col('Score_EW')).alias('SDScore_Max_Diff_EW'),
         (pl.col('EV_NS_Max')-pl.col('Pct_NS')).alias('SDPct_Diff_NS'),
         (pl.col('EV_EW_Max')-pl.col('Pct_EW')).alias('SDPct_Diff_EW'),
-        #['Probs',pair_direction,declarer_direction,suit,str(i)]
-        #([pl.lit(f'Probs_NS_N_S_{t}').alias(f'SDProbs_Taking_{t}') for t in range(14)]), # wrong should be e.g. SDProbs_Taking_0
-        pl.col(f'Probs_NS_N_S_0').alias(f'SDProbs_Taking_0'),
-        pl.col(f'Probs_NS_N_S_1').alias(f'SDProbs_Taking_1'),
-        pl.col(f'Probs_NS_N_S_2').alias(f'SDProbs_Taking_2'),
-        pl.col(f'Probs_NS_N_S_3').alias(f'SDProbs_Taking_3'),
-        pl.col(f'Probs_NS_N_S_4').alias(f'SDProbs_Taking_4'),
-        pl.col(f'Probs_NS_N_S_5').alias(f'SDProbs_Taking_5'),
-        pl.col(f'Probs_NS_N_S_6').alias(f'SDProbs_Taking_6'),
-        pl.col(f'Probs_NS_N_S_7').alias(f'SDProbs_Taking_7'),
-        pl.col(f'Probs_NS_N_S_8').alias(f'SDProbs_Taking_8'),
-        pl.col(f'Probs_NS_N_S_9').alias(f'SDProbs_Taking_9'),
-        pl.col(f'Probs_NS_N_S_10').alias(f'SDProbs_Taking_10'),
-        pl.col(f'Probs_NS_N_S_11').alias(f'SDProbs_Taking_11'),
-        pl.col(f'Probs_NS_N_S_12').alias(f'SDProbs_Taking_12'),
-        pl.col(f'Probs_NS_N_S_13').alias(f'SDProbs_Taking_13'),
-    )
+        ])
     return df
 
 
@@ -1572,25 +1555,44 @@ class DDSDAugmenter:
             lambda df: df.with_columns([
                 pl.concat_str([
                     pl.lit('EV'),
-                    pl.col('Pair_Declarer_Direction'),
+                    pl.col('Declarer_Pair_Direction'),
                     pl.col('Declarer_Direction'),
                     pl.col('BidSuit'),
                     pl.col('BidLvl').cast(pl.String),
                 ], separator='_').alias('Declarer_SDContract'),
                 
-                pl.when(pl.col('Pair_Declarer_Direction').eq(pl.lit('NS')))
+                pl.when(pl.col('Declarer_Pair_Direction').eq(pl.lit('NS')))
                 .then(pl.col('Score_NS'))
                 .otherwise(pl.col('Score_EW'))
                 .alias('Score_Declarer'),
                 
-                pl.when(pl.col('Pair_Declarer_Direction').eq(pl.lit('NS')))
+                pl.when(pl.col('Declarer_Pair_Direction').eq(pl.lit('NS')))
                 .then(pl.col('ParScore_NS'))
                 .otherwise(pl.col('ParScore_EW'))
                 .alias('ParScore_Declarer'),
                 
-                ((pl.col('Pair_Declarer_Direction').eq('NS') & pl.col('Vul_NS')) | 
-                 (pl.col('Pair_Declarer_Direction').eq('EW') & pl.col('Vul_EW')))
+                ((pl.col('Declarer_Pair_Direction').eq('NS') & pl.col('Vul_NS')) | 
+                 (pl.col('Declarer_Pair_Direction').eq('EW') & pl.col('Vul_EW')))
                 .alias('Declarer_Vul'),
+                
+                *[
+                    # Note: this is how to create a column name to dynamically choose a value from multiple columns on a row-by-row basis.
+                    # For each t (0 ... 13), build a new column which looks up the value
+                    # from the column whose name is dynamically built from the row values.
+                    # If BidSuit is None, return None.
+                    pl.struct([
+                        pl.col("Declarer_Pair_Direction"),
+                        pl.col("Declarer_Direction"),
+                        pl.col("BidSuit"),
+                        pl.col("^Probs_.*$")
+                    ]).map_elements(
+                        # crazy, crazy. current_t is needed because map_elements is a lambda and not a function. otherwise t is always 13!
+                        lambda row, current_t=t: None if row["BidSuit"] is None 
+                                                  else row[f'Probs_{row["Declarer_Pair_Direction"]}_{row["Declarer_Direction"]}_{row["BidSuit"]}_{current_t}'],
+                        return_dtype=pl.Float32
+                    ).alias(f'SDProbs_Taking_{t}') # todo: short form of 'Declarer_SDProbs_Taking_{t}'
+                    for t in range(14)
+                ]
             ]),
             self.df
         )
@@ -1599,13 +1601,12 @@ class DDSDAugmenter:
         self.df = self._time_operation(
             "create position columns",
             lambda df: df.with_columns([
-                pl.col('Declarer_Direction').replace_strict(mlBridgeLib.PlayerDirectionToPairDirection).alias('Pair_Declarer_Direction'),
                 pl.col('Declarer_Direction').replace_strict(mlBridgeLib.NextPosition).alias('Direction_OnLead'),
             ])
             .with_columns([
-                pl.col('Pair_Declarer_Direction').replace_strict(mlBridgeLib.PairDirectionToOpponentPairDirection).alias('Opponent_Pair_Direction'),
-                pl.struct(['Pair_Declarer_Direction', 'Score_NS', 'Score_EW']).map_elements(
-                    lambda r: None if r['Pair_Declarer_Direction'] is None else r[f'Score_{r["Pair_Declarer_Direction"]}'],
+                pl.col('Declarer_Pair_Direction').replace_strict(mlBridgeLib.PairDirectionToOpponentPairDirection).alias('Opponent_Pair_Direction'),
+                pl.struct(['Declarer_Pair_Direction', 'Score_NS', 'Score_EW']).map_elements(
+                    lambda r: None if r['Declarer_Pair_Direction'] is None else r[f'Score_{r["Declarer_Pair_Direction"]}'],
                     return_dtype=pl.Int16
                 ).alias('Score_Declarer'),
                 pl.col('Direction_OnLead').replace_strict(mlBridgeLib.NextPosition).alias('Direction_Dummy'),
@@ -1630,11 +1631,11 @@ class DDSDAugmenter:
             "create additional columns",
             lambda df: df.with_columns([
                 pl.struct(['Direction_NotOnLead', 'Player_ID_N', 'Player_ID_E', 'Player_ID_S', 'Player_ID_W']).map_elements(
-                    lambda r: None if r['Direction_NotOnLead'] is None else r[f'Player_ID_{r["Direction_NotOnLead"]}'],
+                    lambda r: None if r['Direction_NotOnLead'] is None else r[f"Player_ID_{r["Direction_NotOnLead"]}"],
                     return_dtype=pl.String
                 ).alias('NotOnLead'),
-                pl.struct(['Pair_Declarer_Direction', 'Vul_NS', 'Vul_EW']).map_elements(
-                    lambda r: None if r['Pair_Declarer_Direction'] is None else r[f'Vul_{r["Pair_Declarer_Direction"]}'],
+                pl.struct(['Declarer_Pair_Direction', 'Vul_NS', 'Vul_EW']).map_elements(
+                    lambda r: None if r['Declarer_Pair_Direction'] is None else r[f'Vul_{r["Declarer_Pair_Direction"]}'],
                     return_dtype=pl.Boolean
                 ).alias('Vul_Declarer'),
                 # ... (remaining struct mappings)
@@ -1712,7 +1713,7 @@ class DDSDAugmenter:
         self._perform_legacy_renames()
         self._create_fake_predictions()
         self._create_declarer_columns()
-        self._create_position_columns()
+        self._create_position_columns()  # This is failing because it needs Pair_Declarer_Direction
         self._create_additional_columns()
         self._create_board_result_columns()
         self._create_trick_columns()

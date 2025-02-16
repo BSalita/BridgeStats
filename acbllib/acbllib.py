@@ -407,19 +407,18 @@ def get_club_results_from_acbl_number(acbl_number):
     soup = BeautifulSoup(response.content, "html.parser")
 
     # Find all anchor tags with href attributes
-    anchor_pattern = re.compile(r'/club\-results/details/\d{6}$')
+    anchor_pattern = re.compile(r'/club\-results/details/\d+$') # was \d{6}
     anchor_tags = soup.find_all('a', href=anchor_pattern)
-    anchor_d = {a['href']:a for a in anchor_tags}
-    hrefs = sorted(anchor_d.keys(),reverse=True)
+    anchor_d = {a['href']: a for a in anchor_tags}
+    sorted_anchor_d = dict(sorted({int(k.split('/')[-1]):v for k,v in anchor_d.items()}.items(), reverse=True))
     # 847339 2023-08-21, Ft Lauderdale Bridge Club, Mon Aft Stratified Pair, Monday Afternoon, 58.52%
-    msgs = [', '.join([anchor_d[href].parent.parent.find_all('td')[i].text.replace('\n','').strip() for i in [0,1,2,3,5]]) for href in hrefs]
-    assert len(hrefs) == len(msgs)
+    msgs = [', '.join([v.parent.parent.find_all('td')[i].text.replace('\n','').strip() for i in [0,1,2,3,5]]) for k,v in sorted_anchor_d.items()]
+    assert len(anchor_d) == len(msgs)
 
     # Print the href attributes
     my_results_details_data = {}
-    for href,msg in zip(hrefs,msgs):
-        detail_url = 'https://my.acbl.org'+href
-        event_id = int(href.split('/')[-1]) # extract event_id from href which is the last part of url
+    for (event_id,href),msg in zip(sorted_anchor_d.items(),msgs):
+        detail_url = 'https://my.acbl.org'+href['href']
         my_results_details_data[event_id] = (url, detail_url, msg)
     return my_results_details_data
 
