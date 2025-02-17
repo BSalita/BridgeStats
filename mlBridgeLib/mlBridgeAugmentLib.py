@@ -158,6 +158,7 @@ def calc_double_dummy_deals(deals, batch_size=40, output_progress=False, progres
 
         if progress:
             progress.progress(100,f"100%: Double dummies calculated for {len(deals)} unique deals.")
+            progress.empty() # hmmm, this removes the progress bar so fast that 100% message won't be seen.
         else:
             print(f"100%: Double dummies calculated for {len(deals)} unique deals.")
     return all_result_tables
@@ -260,6 +261,7 @@ def calculate_single_dummy_probabilities(deal, produce=100):
 
     # todo: has this been obsoleted by endplay's calc_all_tables 2nd parameter?
     ns_ew_rows = {}
+    SDTricks_df = {}
     for ns_ew in ['NS','EW']:
         s = deal[2:].split()
         if ns_ew == 'NS':
@@ -274,13 +276,13 @@ def calculate_single_dummy_probabilities(deal, produce=100):
         sd_deals, sd_dd_result_tables = generate_single_dummy_deals(predeal_string, produce, show_progress=False)
 
         #display_double_dummy_deals(sd_deals, sd_dd_result_tables, 0, 4)
-        SDTricks_df = pl.DataFrame([[sddeal.to_pbn()]+[s for d in t.to_list() for s in d] for sddeal,t in zip(sd_deals,sd_dd_result_tables)],schema={'SD_Deal':pl.String}|{'_'.join(['SDTricks',d,s]):pl.UInt8 for d in 'NESW' for s in 'SHDCN'},orient='row')
+        SDTricks_df[ns_ew] = pl.DataFrame([[sddeal.to_pbn()]+[s for d in t.to_list() for s in d] for sddeal,t in zip(sd_deals,sd_dd_result_tables)],schema={'SD_Deal':pl.String}|{'_'.join(['SDTricks',d,s]):pl.UInt8 for s in 'SHDCN' for d in 'NESW'},orient='row')
 
-        for d in 'NSEW':
+        for d in 'NESW':
             for s in 'SHDCN':
                 # always create 14 rows (0-13 tricks taken) for combo of direction and suit. fill never-happened with proper index and 0.0 prob value.
                 #ns_ew_rows[(ns_ew,d,s)] = dd_df[d+s].to_pandas().value_counts(normalize=True).reindex(range(14), fill_value=0).tolist() # ['Fixed_Direction','Direction_Declarer','Suit']+['SD_Prob_Take_'+str(n) for n in range(14)]
-                vc = {ds:p for ds,p in SDTricks_df['_'.join(['SDTricks',d,s])].value_counts(normalize=True).rows()}
+                vc = {ds:p for ds,p in SDTricks_df[ns_ew]['_'.join(['SDTricks',d,s])].value_counts(normalize=True).rows()}
                 index = {i:0.0 for i in range(14)} # fill values for missing probs
                 ns_ew_rows[(ns_ew,d,s)] = list((index|vc).values())
 
@@ -304,7 +306,7 @@ def calculate_sd_probs(df, hrs_d, sd_productions=100, progress=None):
     for i,pbn in enumerate(unique_pbns):
         if progress:
             percent_complete = int(i*100/len(unique_pbns))
-            progress.progress(percent_complete,f"{percent_complete}%: Single dummies calculated for {i} of {len(unique_pbns)} unique deals using {sd_productions} samples per deal.")
+            progress.progress(percent_complete,f"{percent_complete}%: Single dummies calculated for {i} of {len(unique_pbns)} unique deals using {sd_productions} samples per deal. Takes 1 minute...")
         else:
             if i < 10 or i % 10000 == 0:
                 percent_complete = int(i*100/len(unique_pbns))
@@ -334,6 +336,8 @@ def calculate_sd_probs(df, hrs_d, sd_productions=100, progress=None):
                 sd_probs_d['_'.join(['Probs',pair_direction,declarer_direction,suit,str(i)])].append(t)
     # st.write(sd_probs_d)
     sd_probs_df = pl.DataFrame(sd_probs_d,orient='row')
+    if progress:
+        progress.empty()
     return sd_dfs_d, sd_probs_df
 
 
@@ -485,19 +489,19 @@ def convert_contract_to_contract(df):
 
 # None is used instead of pl.Null because pl.Null becomes 'Null' string in pl.String columns. Not sure what's going on but the solution is to use None.
 def convert_contract_to_declarer(df):
-    return [None if c == 'PASS' else c[2] for c in df['Contract']] # extract declarer from contract
+    return [None if c is None or c == 'PASS' else c[2] for c in df['Contract']] # extract declarer from contract
 
 
 def convert_contract_to_level(df):
-    return [None if c == 'PASS' else c[0] for c in df['Contract']] # extract level from contract
+    return [None if c is None or c == 'PASS' else c[0] for c in df['Contract']] # extract level from contract
 
 
 def convert_contract_to_strain(df):
-    return [None if c == 'PASS' else c[1] for c in df['Contract']] # extract strain from contract
+    return [None if c is None or c == 'PASS' else c[1] for c in df['Contract']] # extract strain from contract
 
 
 def convert_contract_to_dbl(df):
-    return [None if c == 'PASS' else c[3:] for c in df['Contract']] # extract dbl from contract
+    return [None if c is None or c == 'PASS' else c[3:] for c in df['Contract']] # extract dbl from contract
 
 
 def convert_declarer_to_DeclarerName(df):
@@ -509,19 +513,19 @@ def convert_declarer_to_DeclarerID(df):
 
 
 def convert_contract_to_result(df):
-    return [None if c == 'PASS' else 0 if c[-1] in ['=','0'] else int(c[-1]) if c[-2] == '+' else -int(c[-1]) for c in df['Contract']] # create result from contract
+    return [None if c is None or c == 'PASS' else 0 if c[-1] in ['=','0'] else int(c[-1]) if c[-2] == '+' else -int(c[-1]) for c in df['Contract']] # create result from contract
 
 
 def convert_contract_to_tricks(df):
-    return [None if c == 'PASS' else int(c[0])+6+r for c,r in zip(df['Contract'],df['Result'])] # create tricks from contract and result
+    return [None if c is None or c == 'PASS' else int(c[0])+6+r for c,r in zip(df['Contract'],df['Result'])] # create tricks from contract and result
 
 
 def convert_contract_to_DDTricks(df):
-    return [None if c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Declarer_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
+    return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Declarer_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
 def convert_contract_to_DDTricks_Dummy(df):
-    return [None if c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Dummy_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
+    return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Dummy_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
 def convert_contract_to_DDScore_Ref(df):
@@ -1661,7 +1665,7 @@ class DDSDAugmenter:
                     .alias('Computed_Score_Declarer'),
 
                 pl.struct(['Contract', 'Result', 'Score_NS', 'BidLvl', 'BidSuit', 'Dbl','Declarer_Direction', 'Vul_Declarer']).map_elements(
-                    lambda r: 0 if r['Contract'] == 'PASS' else r['Score_NS'] if r['Result'] is None else mlBridgeLib.score(
+                    lambda r: None if r['Contract'] is None else 0 if r['Contract'] == 'PASS' else r['Score_NS'] if r['Result'] is None else mlBridgeLib.score(
                         r['BidLvl'] - 1, 'CDHSN'.index(r['BidSuit']), len(r['Dbl']), 'NESW'.index(r['Declarer_Direction']),
                         r['Vul_Declarer'], r['Result'], True),return_dtype=pl.Int16).alias('Computed_Score_Declarer2'),
             ]),
