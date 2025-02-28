@@ -251,7 +251,7 @@ def ShowDataFrameTable(table_df,key=None,output_method='aggrid',color_column=Non
             '.ag-theme-streamlit': {'transform': 'scale(0.8)', 'transform-origin': '0 0'},
             # odd/even not working # '.ag-row-hover(odd)': {'background-color': '#ffffb3', 'cursor': 'pointer'},
             # odd/even not working # '.ag-row-hover(even)': {'background-color': '#ffd700', 'cursor': 'pointer'},
-            '#gridToolBar': {'padding-bottom': '0px !important'}
+            #'#gridToolBar': {'padding-bottom': '0px !important'}
             }
         if color_column is not None:
             gb.configure_column(color_column, cellStyle={'color': 'black', 'background-color': '#FEFBF7'}) # must be executed before build()

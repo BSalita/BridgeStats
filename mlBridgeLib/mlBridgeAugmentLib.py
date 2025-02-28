@@ -1,6 +1,6 @@
-# todo:
-# we're reading just one url which contains only the player's results. Need to read all urls to get all board results.
-# rename columns
+
+# contains functions to augment df with additional columns
+# mostly polars functions
 
 import polars as pl
 from collections import defaultdict
@@ -85,12 +85,6 @@ def Augment_Metric_By_Suits(metrics,metric,dtype=pl.UInt8):
     #display(metrics.describe())
     return metrics # why is it necessary to return metrics? Isn't it just df?
 
-
-# global variables static and read-only
-# oops. globals don't behave as expected in streamlit. need to use st.session_state but that's not available in this module. just recompute.
-#scores_d = None # (level,suit_char,tricks,vul) -> score
-#all_scores_d = None # (level,suit_char,tricks,vul,dbl) -> score
-#scores_df = None # 'Score_[1-7][SHDCN]'
 
 # calculate dict of contract result scores. each column contains (non-vul,vul) scores for each trick taken. sets are always penalty doubled.
 def calculate_scores():
@@ -211,25 +205,25 @@ def calculate_ddtricks_par_scores(df, hrs_d, scores_d, output_progress=True, pro
         # convert endplay's dd table to df by flattening each dd table into rows.
         flattened_row = [item for sublist in zip(*rt.to_list()) for item in sublist]
         flattened_dd_rows.append(flattened_row)
-    par_df = pl.DataFrame({'ParScore_NS': par_scores_ns, 'ParScore_EW': par_scores_ew, 'ParContract': par_contracts},orient='row')
+    par_df = pl.DataFrame({'Par_NS': par_scores_ns, 'Par_EW': par_scores_ew, 'ParContract': par_contracts},orient='row')
 
     # Create column names
     columns = {f'DD_{direction}_{suit}':pl.UInt8 for direction in 'NESW' for suit in 'SHDCN'}
 
     # Create the DataFrame
-    DDTricks_df = pl.DataFrame(flattened_dd_rows, schema=columns, orient='row')
+    DD_Tricks_df = pl.DataFrame(flattened_dd_rows, schema=columns, orient='row')
 
     dd_ns_ew_columns = [
         pl.max_horizontal(f"DD_{pair[0]}_{strain}",f"DD_{pair[1]}_{strain}").alias(f"DD_{pair}_{strain}")
         for pair in ['NS','EW']
         for strain in "SHDCN"
     ]
-    DDTricks_df = DDTricks_df.with_columns(dd_ns_ew_columns)
+    DD_Tricks_df = DD_Tricks_df.with_columns(dd_ns_ew_columns)
 
-    dd_score_cols = [[scores_d[(level,suit,tricks,vul == 'Both' or (vul != 'None' and direction in vul))] for tricks,vul in zip(DDTricks_df['_'.join(['DD',direction,suit])],df['Vul'])] for direction in 'NESW' for suit in 'SHDCN' for level in range(1, 8)]
-    dd_score_df = pl.DataFrame(dd_score_cols, schema=['_'.join(['DDScore', str(l) + s, d]) for d in 'NESW' for s in 'SHDCN' for l in range(1, 8)])
+    dd_score_cols = [[scores_d[(level,suit,tricks,vul == 'Both' or (vul != 'None' and direction in vul))] for tricks,vul in zip(DD_Tricks_df['_'.join(['DD',direction,suit])],df['Vul'])] for direction in 'NESW' for suit in 'SHDCN' for level in range(1, 8)]
+    dd_score_df = pl.DataFrame(dd_score_cols, schema=['_'.join(['DD_Score', str(l) + s, d]) for d in 'NESW' for s in 'SHDCN' for l in range(1, 8)])
     
-    return DDTricks_df, par_df, dd_score_df
+    return DD_Tricks_df, par_df, dd_score_df
 
 
 def constraints(deal):
@@ -261,7 +255,7 @@ def calculate_single_dummy_probabilities(deal, produce=100):
 
     # todo: has this been obsoleted by endplay's calc_all_tables 2nd parameter?
     ns_ew_rows = {}
-    SDTricks_df = {}
+    SD_Tricks_df = {}
     for ns_ew in ['NS','EW']:
         s = deal[2:].split()
         if ns_ew == 'NS':
@@ -276,17 +270,17 @@ def calculate_single_dummy_probabilities(deal, produce=100):
         sd_deals, sd_dd_result_tables = generate_single_dummy_deals(predeal_string, produce, show_progress=False)
 
         #display_double_dummy_deals(sd_deals, sd_dd_result_tables, 0, 4)
-        SDTricks_df[ns_ew] = pl.DataFrame([[sddeal.to_pbn()]+[s for d in t.to_list() for s in d] for sddeal,t in zip(sd_deals,sd_dd_result_tables)],schema={'SD_Deal':pl.String}|{'_'.join(['SDTricks',d,s]):pl.UInt8 for s in 'SHDCN' for d in 'NESW'},orient='row')
+        SD_Tricks_df[ns_ew] = pl.DataFrame([[sddeal.to_pbn()]+[s for d in t.to_list() for s in d] for sddeal,t in zip(sd_deals,sd_dd_result_tables)],schema={'SD_Deal':pl.String}|{'_'.join(['SD_Tricks',d,s]):pl.UInt8 for s in 'SHDCN' for d in 'NESW'},orient='row')
 
         for d in 'NESW':
             for s in 'SHDCN':
                 # always create 14 rows (0-13 tricks taken) for combo of direction and suit. fill never-happened with proper index and 0.0 prob value.
-                #ns_ew_rows[(ns_ew,d,s)] = dd_df[d+s].to_pandas().value_counts(normalize=True).reindex(range(14), fill_value=0).tolist() # ['Fixed_Direction','Direction_Declarer','Suit']+['SD_Prob_Take_'+str(n) for n in range(14)]
-                vc = {ds:p for ds,p in SDTricks_df[ns_ew]['_'.join(['SDTricks',d,s])].value_counts(normalize=True).rows()}
+                #ns_ew_rows[(ns_ew,d,s)] = dd_df[d+s].to_pandas().value_counts(normalize=True).reindex(range(14), fill_value=0).tolist() # ['Fixed_Direction','Declarer_Direction','Suit']+['SD_Prob_Take_'+str(n) for n in range(14)]
+                vc = {ds:p for ds,p in SD_Tricks_df[ns_ew]['_'.join(['SD_Tricks',d,s])].value_counts(normalize=True).rows()}
                 index = {i:0.0 for i in range(14)} # fill values for missing probs
                 ns_ew_rows[(ns_ew,d,s)] = list((index|vc).values())
 
-    return SDTricks_df, (produce, ns_ew_rows)
+    return SD_Tricks_df, (produce, ns_ew_rows)
 
 
 # def append_single_dummy_results(pbns,sd_cache_d,produce=100):
@@ -440,34 +434,34 @@ def create_best_contracts(df):
 
     # all EV columns are already calculated. just need to get the max.
 
-    # Single loop handles all EV Max, MaxCol combinations
+    # Single loop handles all EV Max, Max_Col combinations
     for v in vulnerabilities:
         # Level 4: Overall Max EV for each vulnerability
         ev_columns = f'^EV_(NS|EW)_[NESW]_[SHDCN]_[1-7]_{v}$'
         max_expr, col_expr = max_and_col(df, ev_columns)
         max_ev_dict[f'EV_{v}_Max'] = max_expr
-        max_ev_dict[f'EV_{v}_MaxCol'] = col_expr
+        max_ev_dict[f'EV_{v}_Max_Col'] = col_expr
 
         for pd in pair_directions:
             # Level 3: Max EV for each pair direction and vulnerability
             ev_columns = f'^EV_{pd}_[NESW]_[SHDCN]_[1-7]_{v}$'
             max_expr, col_expr = max_and_col(df, ev_columns)
             max_ev_dict[f'EV_{pd}_{v}_Max'] = max_expr
-            max_ev_dict[f'EV_{pd}_{v}_MaxCol'] = col_expr
+            max_ev_dict[f'EV_{pd}_{v}_Max_Col'] = col_expr
 
             for dd in pd: #declarer_directions:
                 # Level 2: Max EV for each pair direction, declarer direction, and vulnerability
                 ev_columns = f'^EV_{pd}_{dd}_[SHDCN]_[1-7]_{v}$'
                 max_expr, col_expr = max_and_col(df, ev_columns)
                 max_ev_dict[f'EV_{pd}_{dd}_{v}_Max'] = max_expr
-                max_ev_dict[f'EV_{pd}_{dd}_{v}_MaxCol'] = col_expr
+                max_ev_dict[f'EV_{pd}_{dd}_{v}_Max_Col'] = col_expr
 
                 for s in strains:
                     # Level 1: Max EV for each combination
                     ev_columns = f'^EV_{pd}_{dd}_{s}_[1-7]_{v}$'
                     max_expr, col_expr = max_and_col(df, ev_columns)
                     max_ev_dict[f'EV_{pd}_{dd}_{s}_{v}_Max'] = max_expr
-                    max_ev_dict[f'EV_{pd}_{dd}_{s}_{v}_MaxCol'] = col_expr
+                    max_ev_dict[f'EV_{pd}_{dd}_{s}_{v}_Max_Col'] = col_expr
 
     # Create expressions list from dictionary
     t = time.time()
@@ -520,486 +514,128 @@ def convert_contract_to_tricks(df):
     return [None if c is None or c == 'PASS' else int(c[0])+6+r for c,r in zip(df['Contract'],df['Result'])] # create tricks from contract and result
 
 
-def convert_contract_to_DDTricks(df):
+def convert_contract_to_DD_Tricks(df):
     return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Declarer_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
-def convert_contract_to_DDTricks_Dummy(df):
+def convert_contract_to_DD_Tricks_Dummy(df):
     return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Dummy_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
-def convert_contract_to_DDScore_Ref(df):
+def convert_contract_to_DD_Score_Ref(df):
     # could use pl.str_concat() instead
     df = df.with_columns(
-        (pl.lit('DDScore_')+pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.lit('_')+pl.col('Declarer_Direction')).alias('DDScore_Refs'),
+        (pl.lit('DD_Score_')+pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.lit('_')+pl.col('Declarer_Direction')).alias('DD_Score_Refs'),
     )
     ddscore_ns = []
-    for i,(d,ref) in enumerate(zip(df['Declarer_Direction'],df['DDScore_Refs'])):
+    for i,(d,ref) in enumerate(zip(df['Declarer_Direction'],df['DD_Score_Refs'])):
         if ref is None:
             ddscore_ns.append(0)
         else:
             ddscore_ns.append(df[ref][i] if d in 'NS' else -df[ref][i])
-    df = df.with_columns(pl.Series('DDScore_NS',ddscore_ns,pl.Int16))
-    df = df.with_columns(pl.col('DDScore_NS').neg().alias('DDScore_EW'))
+    df = df.with_columns(pl.Series('DD_Score_NS',ddscore_ns,pl.Int16))
+    df = df.with_columns(pl.col('DD_Score_NS').neg().alias('DD_Score_EW'))
+    df = df.with_columns(pl.when(pl.col('Declarer_Direction').is_in(['N','S'])).then(pl.col('DD_Score_NS')).otherwise(pl.col('DD_Score_EW')).alias('DD_Score_Declarer'))
+    return df
+
+# additional augmentations for ACBL hand records
+def AugmentACBLHandRecords(df,hrs_d):
+
+    augmenter = HandAugmenter(df, hrs_d, sd_productions=40, progress=None)
+    df = augmenter.perform_hand_augmentations()
+
+    # takes 5s
+    if 'game_date' in df.columns:
+        t = time.time()
+        df = df.with_columns(pl.Series('Date',df['game_date'].str.strptime(pl.Date,'%Y-%m-%d %H:%M:%S')))
+        print(f"Time to create ACBL Date: {time.time()-t} seconds")
+    # takes 5s
+    if 'hand_record_id' in df.columns:
+        t = time.time()
+        df = df.with_columns(
+            pl.col('hand_record_id').cast(pl.String),
+        )
+        print(f"Time to create ACBL hand_record_id: {time.time()-t} seconds")
     return df
 
 
-class HandAugmenter:
-    def __init__(self, df, hrs_d=None, sd_productions=40, progress=None):
-        self.df = df
-        self.hrs_d = hrs_d if hrs_d is not None else {}
-        self.sd_productions = sd_productions
-        self.progress = progress
-        self.declarer_to_LHO_d = {None:None,'N':'E','E':'S','S':'W','W':'N'}
-        self.declarer_to_dummy_d = {None:None,'N':'S','E':'W','S':'N','W':'E'}
-        self.declarer_to_RHO_d = {None:None,'N':'W','E':'N','S':'E','W':'S'}
-        self.vul_conditions = {
-            'NS': pl.col('Vul').is_in(['N_S', 'Both']),
-            'EW': pl.col('Vul').is_in(['E_W', 'Both'])
-        }
+def Perform_Legacy_Renames(df):
 
-    def _time_operation(self, operation_name, func, *args, **kwargs):
-        t = time.time()
-        result = func(*args, **kwargs)
-        print(f"{operation_name}: time:{time.time()-t} seconds")
-        return result
-
-    def _add_default_columns(self):
-        if 'group_id' not in self.df.columns:
-            self.df = self.df.with_columns(pl.lit(0).alias('group_id'))
-        if 'session_id' not in self.df.columns:
-            self.df = self.df.with_columns(pl.lit(0).alias('session_id'))
-        if 'section_name' not in self.df.columns:
-            self.df = self.df.with_columns(pl.lit('').alias('section_name'))
-
-    def _create_hand_columns(self):
-        self.df = self._time_operation("create_hand_nesw_columns", create_hand_nesw_columns, self.df)
-        self.df = self._time_operation("create_suit_nesw_columns", create_suit_nesw_columns, self.df)
-        self.df = self._time_operation("create_hands_lists_column", create_hands_lists_column, self.df)
-
-    def _process_scores_and_tricks(self):
-        all_scores_d, scores_d, scores_df = self._time_operation("calculate_scores", calculate_scores)
-        DDTricks_df, par_df, dd_score_df = self._time_operation(
-            "calculate_ddtricks_par_scores", 
-            calculate_ddtricks_par_scores, 
-            self.df, self.hrs_d, scores_d, progress=self.progress
-        )
-        sd_dfs_d, sd_probs_df = self._time_operation(
-            "calculate_sd_probs",
-            calculate_sd_probs,
-            self.df, self.hrs_d, self.sd_productions, self.progress
-        )
-        sd_ev_df = self._time_operation(
-            "calculate_sd_expected_values",
-            calculate_sd_expected_values,
-            self.df, self.hrs_d, scores_df
-        )
-        best_contracts_df = self._time_operation("create_best_contracts", create_best_contracts, sd_ev_df)
-        
-        self.df = pl.concat(
-            [self.df, DDTricks_df, par_df, dd_score_df, sd_probs_df, sd_ev_df, best_contracts_df],
-            how='horizontal'
-        )
-        return scores_df
-
-    def _process_contract_columns(self):
-        if 'Player_Name_N' in self.df.columns:
-            self.df = self._time_operation(
-                "rename_players",
-                lambda df: df.rename({'Player_Name_N':'N','Player_Name_E':'E','Player_Name_S':'S','Player_Name_W':'W'}),
-                self.df
-            )
-
-        self.df = self._time_operation(
-            "convert_contract_to_contract",
-            lambda df: df.with_columns(
-                pl.Series('Contract', convert_contract_to_contract(df), pl.String, strict=False)
-            ),
-            self.df
-        )
-
-        self.df = self._time_operation(
-            "convert_contract_parts",
-            lambda df: df.with_columns([
-                pl.Series('Declarer_Direction', convert_contract_to_declarer(df), pl.String, strict=False),
-                pl.Series('BidLvl', convert_contract_to_level(df), pl.UInt8, strict=False),
-                pl.Series('BidSuit', convert_contract_to_strain(df), pl.String, strict=False),
-                pl.Series('Dbl', convert_contract_to_dbl(df), pl.String, strict=False),
-            ]),
-            self.df
-        )
-
-    def _create_contract_types(self):
-        self.df = self._time_operation(
-            "create_contract_types",
-            lambda df: df.with_columns(
-                pl.when(pl.col('Contract').eq('PASS')).then(pl.lit("Pass"))
-                .when(pl.col('BidLvl').eq(5) & pl.col('BidSuit').is_in(['C', 'D'])).then(pl.lit("Game"))
-                .when(pl.col('BidLvl').is_in([4,5]) & pl.col('BidSuit').is_in(['H', 'S'])).then(pl.lit("Game"))
-                .when(pl.col('BidLvl').is_in([3,4,5]) & pl.col('BidSuit').eq('N')).then(pl.lit("Game"))
-                .when(pl.col('BidLvl').eq(6)).then(pl.lit("SSlam"))
-                .when(pl.col('BidLvl').eq(7)).then(pl.lit("GSlam"))
-                .otherwise(pl.lit("Partial"))
-                .alias('ContractType')
-            ),
-            self.df
-        )
-
-    def _create_direction_columns(self):
-        self.df = self._time_operation(
-            "convert_contract_to_directions",
-            lambda df: df.with_columns([
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_LHO_d).alias('LHO_Direction'),
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_dummy_d).alias('Dummy_Direction'),
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_RHO_d).alias('RHO_Direction'),
-            ]),
-            self.df
-        )
-
-    def _create_declarer_columns(self):
-        self.df = self._time_operation(
-            "convert_declarer_columns",
-            lambda df: df.with_columns([
-                pl.Series('Declarer_Name', convert_declarer_to_DeclarerName(df), pl.String, strict=False),
-                pl.Series('Declarer_ID', convert_declarer_to_DeclarerID(df), pl.String, strict=False),
-            ]),
-            self.df
-        )
-
-    def _create_result_columns(self):
-        if 'Result' not in self.df.columns:
-            assert 'Contract' in self.df.columns, 'Contract column is required to create Result column.'
-            self.df = self._time_operation(
-                "convert_contract_to_result",
-                lambda df: df.with_columns(
-                    pl.Series('Result', convert_contract_to_result(df), pl.Int8, strict=False)
-                ),
-                self.df
-            )
-
-        if 'Tricks' not in self.df.columns:
-            self.df = self._time_operation(
-                "convert_contract_to_tricks",
-                lambda df: df.with_columns(
-                    pl.Series('Tricks', convert_contract_to_tricks(df), pl.UInt8, strict=False)
-                ),
-                self.df
-            )
-
-    def _create_dd_columns(self):
-        if 'DDTricks' not in self.df.columns:
-            self.df = self._time_operation(
-                "convert_contract_to_DDTricks",
-                lambda df: df.with_columns([
-                    pl.Series('DDTricks', convert_contract_to_DDTricks(df), pl.UInt8, strict=False),
-                    pl.Series('DDTricks_Dummy', convert_contract_to_DDTricks_Dummy(df), pl.UInt8, strict=False),
-                ]),
-                self.df
-            )
-
-        if 'DDScore_NS' not in self.df.columns:
-            self.df = self._time_operation(
-                "convert_contract_to_DDScore_Ref",
-                convert_contract_to_DDScore_Ref,
-                self.df
-            )
-
-    def _create_score_columns(self):
-        if 'Score_NS' not in self.df.columns:
-            self.df = self._time_operation(
-                "convert_score_to_score",
-                lambda df: df.with_columns([
-                    pl.col('Score').alias('Score_NS'),
-                    pl.col('Score').neg().alias('Score_EW')
-                ]),
-                self.df
-            )
-
-    def _create_ev_columns(self):
-        max_expressions = []
-        for pd in ['NS', 'EW']:
-            max_expressions.extend(self._create_ev_expressions_for_pair(pd))
-        
-        self.df = self._time_operation(
-            "create_ev_columns",
-            lambda df: df.with_columns(max_expressions).with_columns([
-                pl.max_horizontal('EV_NS_Max','EV_EW_Max').alias('EV_Max'),
-                pl.max_horizontal('EV_NS_MaxCol','EV_EW_MaxCol').alias('EV_MaxCol')
-            ]),
-            self.df
-        )
-
-    def _create_ev_expressions_for_pair(self, pd):
-        expressions = []
-        expressions.extend(self._create_basic_ev_expressions(pd))
-        
-        for dd in pd:
-            expressions.extend(self._create_declarer_ev_expressions(pd, dd))
-            
-            for s in 'SHDCN':
-                expressions.extend(self._create_strain_ev_expressions(pd, dd, s))
-                
-                for l in range(1, 8):
-                    expressions.extend(self._create_level_ev_expressions(pd, dd, s, l))
-        
-        return expressions
-
-    def _create_basic_ev_expressions(self, pd):
-        return [
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_V_Max'))
-              .otherwise(pl.col(f'EV_{pd}_NV_Max'))
-              .alias(f'EV_{pd}_Max'),
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_V_MaxCol'))
-              .otherwise(pl.col(f'EV_{pd}_NV_MaxCol'))
-              .alias(f'EV_{pd}_MaxCol')
-        ]
-
-    def _create_declarer_ev_expressions(self, pd, dd):
-        return [
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_{dd}_V_Max'))
-              .otherwise(pl.col(f'EV_{pd}_{dd}_NV_Max'))
-              .alias(f'EV_{pd}_{dd}_Max'),
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_{dd}_V_MaxCol'))
-              .otherwise(pl.col(f'EV_{pd}_{dd}_NV_MaxCol'))
-              .alias(f'EV_{pd}_{dd}_MaxCol')
-        ]
-
-    def _create_strain_ev_expressions(self, pd, dd, s):
-        return [
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_{dd}_{s}_V_Max'))
-              .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_Max'))
-              .alias(f'EV_{pd}_{dd}_{s}_Max'),
-            pl.when(self.vul_conditions[pd])
-              .then(pl.col(f'EV_{pd}_{dd}_{s}_V_MaxCol'))
-              .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_MaxCol'))
-              .alias(f'EV_{pd}_{dd}_{s}_MaxCol')
-        ]
-
-    def _create_level_ev_expressions(self, pd, dd, s, l):
-        return [
-            pl.when(self.vul_conditions[pd])
-            .then(pl.col(f'EV_{pd}_{dd}_{s}_{l}_V'))
-            .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_{l}_NV'))
-            .alias(f'EV_{pd}_{dd}_{s}_{l}')
-        ]
-
-    def _create_diff_columns(self):
-        # First create the initial diff columns
-        self.df = self._time_operation(
-            "create_initial_diff_columns",
-            lambda df: df.with_columns([
-                pl.Series('ParScore_Diff_NS', (df['Score_NS']-df['ParScore_NS']), pl.Int16),
-                pl.Series('ParScore_Diff_EW', (df['Score_EW']-df['ParScore_EW']), pl.Int16),
-                pl.Series('DDTricks_Diff', (df['Tricks'].cast(pl.Int8)-df['DDTricks'].cast(pl.Int8)), pl.Int8, strict=False),
-                pl.Series('EV_MaxScore_Diff_NS', df['Score_NS'] - df['EV_NS_Max'], pl.Float32),
-                pl.Series('EV_MaxScore_Diff_EW', -df['Score_NS'] - df['EV_EW_Max'], pl.Float32),
-            ]),
-            self.df
-        )
-
-        # Then create ParScore_Diff_EW using the now-existing ParScore_Diff_NS
-        self.df = self._time_operation(
-            "create_parscore_diff_ew",
-            lambda df: df.with_columns([
-                pl.Series('ParScore_Diff_EW', -df['ParScore_Diff_NS'], pl.Int16)
-            ]),
-            self.df
-        )
-
-    def perform_hand_augmentations(self):
-        """Main method to perform all hand augmentations"""
-        self._add_default_columns()
-        self._create_hand_columns()
-        scores_df = self._process_scores_and_tricks()
-        self._process_contract_columns()
-        self._create_contract_types()
-        self._create_direction_columns()
-        self._create_declarer_columns()
-        self._create_result_columns()
-        self._create_dd_columns()
-        self._create_score_columns()
-        self._create_ev_columns()
-        self._create_diff_columns()
-        return self.df
-# example of working ranking code. but column must contain all scores.
-# scores = pl.col('Score_NS')
-# df = df.with_columns(
-#     scores.rank(method='average', descending=False).sub(1).over(['session_id', 'Board']).alias('ParScore_MP_NS'),
-#     scores.rank(method='average', descending=True).sub(1).over(['session_id', 'Board']).alias('ParScore_MP_EW')
-# )
+    df = df.with_columns([
+        #pl.col('Section').alias('section_name'), # will this be needed for acbl?
+        pl.col('N').alias('Player_Name_N'),
+        pl.col('S').alias('Player_Name_S'),
+        pl.col('E').alias('Player_Name_E'),
+        pl.col('W').alias('Player_Name_W'),
+        pl.col('Declarer_Name').alias('Name_Declarer'),
+        pl.col('Declarer_ID').alias('Number_Declarer'), #  todo: rename to 'Declarer_ID'?
+        pl.col('Declarer_Direction').replace_strict(mlBridgeLib.PlayerDirectionToPairDirection).alias('Declarer_Pair_Direction'),
+        pl.concat_list(['N', 'S']).alias('Player_Names_NS'),
+        pl.concat_list(['E', 'W']).alias('Player_Names_EW'),
+        # EV legacy renames
+        # pl.col('EV_Max_Col').alias('SD_Contract_Max'), # Pair direction invariant.
+        # pl.col('EV_Max_NS').alias('SD_Score_NS'),
+        # pl.col('EV_Max_EW').alias('SD_Score_EW'),
+        # pl.col('EV_Max_NS').alias('SD_Score_Max_NS'),
+        # pl.col('EV_Max_EW').alias('SD_Score_Max_EW'),
+        # (pl.col('EV_Max_NS')-pl.col('Score_NS')).alias('SD_Score_Diff_NS'),
+        # (pl.col('EV_Max_EW')-pl.col('Score_EW')).alias('SD_Score_Diff_EW'),
+        # (pl.col('EV_Max_NS')-pl.col('Score_NS')).alias('SD_Score_Max_Diff_NS'),
+        # (pl.col('EV_Max_EW')-pl.col('Score_EW')).alias('SD_Score_Max_Diff_EW'),
+        # (pl.col('EV_Max_NS')-pl.col('Pct_NS')).alias('SD_Pct_Diff_NS'),
+        # (pl.col('EV_Max_EW')-pl.col('Pct_EW')).alias('SD_Pct_Diff_EW'),
+        ])
+    return df
 
 
-def calculate_matchpoint_scores_ns(df,score_columns):
+def Create_Fake_Predictions(df):
+    # todo: remove this once NN predictions are implemented
+    df = df.with_columns(
+
+        # pl.col('Pct_NS').alias('Pct_NS_Pred'),
+        # pl.col('Pct_EW').alias('Pct_EW_Pred'),
+        # pl.col('Pct_NS').sub(pl.col('Pct_NS')).alias('Pct_NS_Diff_Pred'),
+        # pl.col('Pct_EW').sub(pl.col('Pct_EW')).alias('Pct_EW_Diff_Pred'),
+        # pl.col('Declarer_Direction').alias('Declarer_Direction_Pred'), # Declarer_Direction_Actual not needed
+        # pl.lit(.321).alias('Declarer_Pct_Pred'), # todo: implement 'Declarer_Pct'
+        # pl.lit(456).alias('Declarer_Number_Pred'), # todo: implement 'Declarer_ID'
+        # pl.col('Declarer_Name').alias('Declarer_Name_Pred'),
+        # pl.col('Contract').alias('Contract_Pred'),
+    )
+    return df
+
+
+# def calculate_matchpoint_scores_ns(df,score_columns):
     
-    # Process each row
-    mp_columns = defaultdict(list)
-    for r in df.iter_rows(named=True):
-        scores_list = r['Expanded_Scores_List'] # todo: make 'Expanded_Scores_List' sorted and with a 'Score_NS' removed?
-        if scores_list is None:
-            # todo: kludge: apparently Expanded_Scores_List can be null if director's adjustment.
-            # matchpoints can't be computed because there's no list of scores. we only have scores at player's table, not all tables.
-            # The fix is to download all table's results to replace a null Expanded_Scores_List.
-            print(f"Expanded_Scores_List is null: Score_NS:{r['Score_NS']} MP_NS:{r['MP_NS']}. Skipping.")
-            for col in score_columns:
-                mp_columns['MP_'+col].append(0.5)
-            continue
-        scores_list.remove(r['Score_NS'])
+#     # Process each row
+#     mp_columns = defaultdict(list)
+#     for r in df.iter_rows(named=True):
+#         scores_list = r['Expanded_Scores_List'] # todo: make 'Expanded_Scores_List' sorted and with a 'Score_NS' removed?
+#         if scores_list is None:
+#             # todo: kludge: apparently Expanded_Scores_List can be null if director's adjustment.
+#             # matchpoints can't be computed because there's no list of scores. we only have scores at player's table, not all tables.
+#             # The fix is to download all table's results to replace a null Expanded_Scores_List.
+#             print(f"Expanded_Scores_List is null: Score_NS:{r['Score_NS']} MP_NS:{r['MP_NS']}. Skipping.")
+#             for col in score_columns:
+#                 mp_columns['MP_'+col].append(0.5)
+#             continue
+#         scores_list.remove(r['Score_NS'])
         
-        for col in score_columns:
-            # Calculate rank for each DD score
-            rank = 0.0
-            new_score = r[col]
-            if scores_list:
-                for score in scores_list:
-                    if new_score > score:
-                        rank += 1.0
-                    elif new_score == score:
-                        rank += 0.5
+#         for col in score_columns:
+#             # Calculate rank for each DD score
+#             rank = 0.0
+#             new_score = r[col]
+#             if scores_list:
+#                 for score in scores_list:
+#                     if new_score > score:
+#                         rank += 1.0
+#                     elif new_score == score:
+#                         rank += 0.5
                     
-            mp_columns['MP_'+col].append(rank)
+#             mp_columns['MP_'+col].append(rank)
     
-    # Add all new columns at once
-    return df.hstack(pl.DataFrame(mp_columns))
-
-
-class MatchPointAugmenter:
-    def __init__(self, df):
-        self.df = df
-        self.discrete_score_columns = ['DDScore_NS', 'ParScore_NS', 'EV_NS_Max']
-        self.dd_score_columns = [f'DDScore_{l}{s}_{d}' for d in 'NESW' for s in 'SHDCN' for l in range(1,8)]
-        self.ev_score_columns = [f'EV_{pd}_{d}_{s}_{l}' for pd in ['NS','EW'] for d in pd for s in 'SHDCN' for l in range(1,8)]
-        self.all_score_columns = self.discrete_score_columns + self.dd_score_columns + self.ev_score_columns
-
-    def _time_operation(self, operation_name, func, *args, **kwargs):
-        t = time.time()
-        result = func(*args, **kwargs)
-        print(f"{operation_name}: time:{time.time()-t} seconds")
-        return result
-
-    def _create_mp_top(self):
-        if 'MP_Top' not in self.df.columns:
-            self.df = self._time_operation(
-                "create MP_Top",
-                lambda df: df.with_columns(
-                    pl.col('Score').count().over(['session_id','PBN','Board']).sub(1).alias('MP_Top')
-                ),
-                self.df
-            )
-
-    def _calculate_matchpoints(self):
-        if 'MP_NS' not in self.df.columns:
-            self.df = self._time_operation(
-                "calculate matchpoints MP_(NS|EW)",
-                lambda df: df.with_columns([
-                    pl.col('Score_NS').rank(method='average', descending=False).sub(1)
-                        .over(['session_id', 'PBN', 'Board']).alias('MP_NS'),
-                    pl.col('Score_EW').rank(method='average', descending=False).sub(1)
-                        .over(['session_id', 'PBN', 'Board']).alias('MP_EW'),
-                ]),
-                self.df
-            )
-
-    def _calculate_percentages(self):
-        if 'Pct_NS' not in self.df.columns:
-            self.df = self._time_operation(
-                "calculate matchpoints percentages",
-                lambda df: df.with_columns([
-                    (pl.col('MP_NS') / pl.col('MP_Top')).alias('Pct_NS'),
-                    (pl.col('MP_EW') / pl.col('MP_Top')).alias('Pct_EW')
-                ]),
-                self.df
-            )
-
-    def _create_declarer_pct(self):
-        if 'Declarer_Pct' not in self.df.columns:
-            self.df = self._time_operation(
-                "create Declarer_Pct",
-                lambda df: df.with_columns(
-                    pl.when(pl.col('Declarer_Direction').is_in(['N','S']))
-                    .then('Pct_NS')
-                    .otherwise('Pct_EW')
-                    .alias('Declarer_Pct')
-                ),
-                self.df
-            )
-
-    def _calculate_all_score_matchpoints(self):
-        t = time.time()
-        if 'Expanded_Scores_List' in self.df.columns:
-            print('Calculate matchpoints for existing Expanded_Scores_List column.')
-            self.df = calculate_matchpoint_scores_ns(self.df, self.all_score_columns)
-        else:
-            print('Calculate matchpoints for session, PBN, and Board.')
-            for col in self.all_score_columns:
-                if 'MP_'+col not in self.df.columns:
-                    self.df = self.df.with_columns([
-                        pl.col('Score_NS').rank(method='average', descending=False)
-                        .sub(1).over(['session_id', 'PBN', 'Board']).alias('MP_'+col)
-                    ])
-        print(f"calculate matchpoints all_score_columns: time:{time.time()-t} seconds")
-
-    def _calculate_final_scores(self):
-        t = time.time()
-        
-        # Calculate MP and percentages for discrete scores
-        for col_ns in self.discrete_score_columns:
-            col_ew = col_ns.replace('NS','EW')
-            self.df = self.df.with_columns(
-                (pl.col('MP_Top')-pl.col(f'MP_{col_ns}')).alias(f'MP_{col_ew}')
-            ).with_columns([
-                (pl.col(f'MP_{col_ns}')/pl.col('MP_Top')).alias(col_ns.replace('_NS','_Pct_NS')),
-                (pl.col(f'MP_{col_ew}')/pl.col('MP_Top')).alias(col_ew.replace('_EW','_Pct_EW')),
-            ])
-
-        # Calculate remaining scores and percentages
-        operations = [
-            lambda df: df.with_columns((1-pl.col('ParScore_Pct_NS')).alias('ParScore_Pct_EW')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DDScore_[1-7][SHDCN]_[NS]$').alias(f'MP_DDScore_NS_Max')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DDScore_[1-7][SHDCN]_[EW]$').alias(f'MP_DDScore_EW_Max')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_NS_[NS]_[SHDCN]_[1-7]$').alias(f'MP_EV_NS_Max')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_EW_[EW]_[SHDCN]_[1-7]$').alias(f'MP_EV_EW_Max')),
-            lambda df: df.with_columns([
-                (pl.col('MP_DDScore_NS_Max')/pl.col('MP_Top')).alias('DDScore_Pct_NS_Max'),
-                (pl.col('MP_DDScore_EW_Max')/pl.col('MP_Top')).alias('DDScore_Pct_EW_Max'),
-                (pl.col('MP_EV_NS_Max')/pl.col('MP_Top')).alias('EV_Pct_NS_Max'),
-                (pl.col('MP_EV_EW_Max')/pl.col('MP_Top')).alias('EV_Pct_EW_Max'),
-                pl.col('DDScore_Pct_NS').alias('DDPct_NS'),
-                pl.col('DDScore_Pct_EW').alias('DDPct_EW'),
-                pl.col('MP_NS').alias('Matchpoints_NS'),
-                pl.col('MP_EW').alias('Matchpoints_EW'),
-                pl.col('MP_EV_NS_Max').alias('SDMPs_Max_NS'),
-                pl.col('MP_Top').sub(pl.col('MP_EV_NS_Max')).alias('SDMPs_Max_EW'),
-                pl.col('EV_Pct_NS_Max').alias('SDPct_NS'),
-                pl.col('EV_Pct_EW_Max').alias('SDPct_EW'),
-                pl.col('EV_Pct_NS_Max').alias('SDPct_Max_NS'),
-                pl.col('EV_Pct_EW_Max').alias('SDPct_Max_EW'),
-                (pl.col('EV_Pct_NS_Max')-pl.col('Pct_NS')).alias('SDPct_Max_Diff_NS'),
-                (pl.col('EV_Pct_EW_Max')-pl.col('Pct_EW')).alias('SDPct_Max_Diff_EW'),
-                (pl.col('ParScore_Pct_NS')-pl.col('Pct_NS')).alias('SDParScore_Pct_Diff_NS'),
-                (pl.col('ParScore_Pct_EW')-pl.col('Pct_EW')).alias('SDParScore_Pct_Diff_EW'),
-                (pl.col('ParScore_Pct_NS')-pl.col('Pct_NS')).alias('SDParScore_Pct_Max_Diff_NS'),
-                (pl.col('ParScore_Pct_EW')-pl.col('Pct_EW')).alias('SDParScore_Pct_Max_Diff_EW'),
-            ])
-        ]
-
-        for operation in operations:
-            self.df = operation(self.df)
-
-        print(f"Time to rank expanded scores: {time.time()-t} seconds")
-
-    def perform_matchpoint_augmentations(self):
-        self._create_mp_top()
-        self._calculate_matchpoints()
-        self._calculate_percentages()
-        self._create_declarer_pct()
-        self._calculate_all_score_matchpoints()
-        self._calculate_final_scores()
-        return self.df
+#     # Add all new columns at once
+#     return df.hstack(pl.DataFrame(mp_columns))
 
 
 def DealToCards(df):
@@ -1141,6 +777,290 @@ def calculate_LoTT(df):
     
     return df
 
+
+class HandAugmenter:
+    def __init__(self, df, hrs_d=None, sd_productions=40, progress=None):
+        self.df = df
+        self.hrs_d = hrs_d if hrs_d is not None else {}
+        self.sd_productions = sd_productions
+        self.progress = progress
+        self.declarer_to_LHO_d = {None:None,'N':'E','E':'S','S':'W','W':'N'}
+        self.declarer_to_dummy_d = {None:None,'N':'S','E':'W','S':'N','W':'E'}
+        self.declarer_to_RHO_d = {None:None,'N':'W','E':'N','S':'E','W':'S'}
+        self.vul_conditions = {
+            'NS': pl.col('Vul').is_in(['N_S', 'Both']),
+            'EW': pl.col('Vul').is_in(['E_W', 'Both'])
+        }
+
+    def _time_operation(self, operation_name, func, *args, **kwargs):
+        t = time.time()
+        result = func(*args, **kwargs)
+        print(f"{operation_name}: time:{time.time()-t} seconds")
+        return result
+
+    def _add_default_columns(self):
+        if 'group_id' not in self.df.columns:
+            self.df = self.df.with_columns(pl.lit(0).alias('group_id'))
+        if 'session_id' not in self.df.columns:
+            self.df = self.df.with_columns(pl.lit(0).alias('session_id'))
+        if 'section_name' not in self.df.columns:
+            self.df = self.df.with_columns(pl.lit('').alias('section_name'))
+
+    def _create_hand_columns(self):
+        self.df = self._time_operation("create_hand_nesw_columns", create_hand_nesw_columns, self.df)
+        self.df = self._time_operation("create_suit_nesw_columns", create_suit_nesw_columns, self.df)
+        self.df = self._time_operation("create_hands_lists_column", create_hands_lists_column, self.df)
+
+    def _process_scores_and_tricks(self):
+        all_scores_d, scores_d, scores_df = self._time_operation("calculate_scores", calculate_scores)
+        DD_Tricks_df, par_df, dd_score_df = self._time_operation(
+            "calculate_ddtricks_par_scores", 
+            calculate_ddtricks_par_scores, 
+            self.df, self.hrs_d, scores_d, progress=self.progress
+        )
+        sd_dfs_d, sd_probs_df = self._time_operation(
+            "calculate_sd_probs",
+            calculate_sd_probs,
+            self.df, self.hrs_d, self.sd_productions, self.progress
+        )
+        sd_ev_df = self._time_operation(
+            "calculate_sd_expected_values",
+            calculate_sd_expected_values,
+            self.df, self.hrs_d, scores_df
+        )
+        best_contracts_df = self._time_operation("create_best_contracts", create_best_contracts, sd_ev_df)
+        
+        self.df = pl.concat(
+            [self.df, DD_Tricks_df, par_df, dd_score_df, sd_probs_df, sd_ev_df, best_contracts_df],
+            how='horizontal'
+        )
+        return scores_df
+
+    def _process_contract_columns(self):
+        if 'Player_Name_N' in self.df.columns:
+            self.df = self._time_operation(
+                "rename_players",
+                lambda df: df.rename({'Player_Name_N':'N','Player_Name_E':'E','Player_Name_S':'S','Player_Name_W':'W'}),
+                self.df
+            )
+
+        self.df = self._time_operation(
+            "convert_contract_to_contract",
+            lambda df: df.with_columns(
+                pl.Series('Contract', convert_contract_to_contract(df), pl.String, strict=False)
+            ),
+            self.df
+        )
+
+        self.df = self._time_operation(
+            "convert_contract_parts",
+            lambda df: df.with_columns([
+                pl.Series('Declarer_Direction', convert_contract_to_declarer(df), pl.String, strict=False),
+                pl.Series('BidLvl', convert_contract_to_level(df), pl.UInt8, strict=False),
+                pl.Series('BidSuit', convert_contract_to_strain(df), pl.String, strict=False),
+                pl.Series('Dbl', convert_contract_to_dbl(df), pl.String, strict=False),
+            ]),
+            self.df
+        )
+
+    def _create_contract_types(self):
+        self.df = self._time_operation(
+            "create_contract_types",
+            lambda df: df.with_columns(
+                pl.when(pl.col('Contract').eq('PASS')).then(pl.lit("Pass"))
+                .when(pl.col('BidLvl').eq(5) & pl.col('BidSuit').is_in(['C', 'D'])).then(pl.lit("Game"))
+                .when(pl.col('BidLvl').is_in([4,5]) & pl.col('BidSuit').is_in(['H', 'S'])).then(pl.lit("Game"))
+                .when(pl.col('BidLvl').is_in([3,4,5]) & pl.col('BidSuit').eq('N')).then(pl.lit("Game"))
+                .when(pl.col('BidLvl').eq(6)).then(pl.lit("SSlam"))
+                .when(pl.col('BidLvl').eq(7)).then(pl.lit("GSlam"))
+                .otherwise(pl.lit("Partial"))
+                .alias('ContractType')
+            ),
+            self.df
+        )
+
+    def _create_direction_columns(self):
+        self.df = self._time_operation(
+            "convert_contract_to_directions",
+            lambda df: df.with_columns([
+                pl.col('Declarer_Direction').replace_strict(self.declarer_to_LHO_d).alias('LHO_Direction'),
+                pl.col('Declarer_Direction').replace_strict(self.declarer_to_dummy_d).alias('Dummy_Direction'),
+                pl.col('Declarer_Direction').replace_strict(self.declarer_to_RHO_d).alias('RHO_Direction'),
+            ]),
+            self.df
+        )
+
+    def _create_declarer_columns(self):
+        self.df = self._time_operation(
+            "convert_declarer_columns",
+            lambda df: df.with_columns([
+                pl.Series('Declarer_Name', convert_declarer_to_DeclarerName(df), pl.String, strict=False),
+                pl.Series('Declarer_ID', convert_declarer_to_DeclarerID(df), pl.String, strict=False),
+            ]),
+            self.df
+        )
+
+    def _create_result_columns(self):
+        if 'Result' not in self.df.columns:
+            assert 'Contract' in self.df.columns, 'Contract column is required to create Result column.'
+            self.df = self._time_operation(
+                "convert_contract_to_result",
+                lambda df: df.with_columns(
+                    pl.Series('Result', convert_contract_to_result(df), pl.Int8, strict=False)
+                ),
+                self.df
+            )
+
+        if 'Tricks' not in self.df.columns:
+            self.df = self._time_operation(
+                "convert_contract_to_tricks",
+                lambda df: df.with_columns(
+                    pl.Series('Tricks', convert_contract_to_tricks(df), pl.UInt8, strict=False)
+                ),
+                self.df
+            )
+
+    def _create_dd_columns(self):
+        if 'DD_Tricks' not in self.df.columns:
+            self.df = self._time_operation(
+                "convert_contract_to_DD_Tricks",
+                lambda df: df.with_columns([
+                    pl.Series('DD_Tricks', convert_contract_to_DD_Tricks(df), pl.UInt8, strict=False),
+                    pl.Series('DD_Tricks_Dummy', convert_contract_to_DD_Tricks_Dummy(df), pl.UInt8, strict=False),
+                ]),
+                self.df
+            )
+
+        if 'DD_Score_NS' not in self.df.columns:
+            self.df = self._time_operation(
+                "convert_contract_to_DD_Score_Ref",
+                convert_contract_to_DD_Score_Ref,
+                self.df
+            )
+
+    def _create_score_columns(self):
+        if 'Score_NS' not in self.df.columns:
+            self.df = self._time_operation(
+                "convert_score_to_score",
+                lambda df: df.with_columns([
+                    pl.col('Score').alias('Score_NS'),
+                    pl.col('Score').neg().alias('Score_EW')
+                ]),
+                self.df
+            )
+
+    def _create_ev_columns(self):
+        max_expressions = []
+        for pd in ['NS', 'EW']:
+            max_expressions.extend(self._create_ev_expressions_for_pair(pd))
+        
+        self.df = self._time_operation(
+            "create_ev_columns",
+            lambda df: df.with_columns(max_expressions).with_columns([
+                pl.max_horizontal('EV_Max_NS','EV_Max_EW').alias('EV_Max'),
+                pl.max_horizontal('EV_Max_Col_NS','EV_Max_Col_EW').alias('EV_Max_Col'),
+                pl.when(pl.col('Declarer_Direction').is_in(['N','S'])).then(pl.col('EV_Max_NS')).otherwise(pl.col('EV_Max_EW')).alias('EV_Max_Declarer'),
+            ]),
+            self.df
+        )
+
+    def _create_ev_expressions_for_pair(self, pd):
+        expressions = []
+        expressions.extend(self._create_basic_ev_expressions(pd))
+        
+        for dd in pd:
+            expressions.extend(self._create_declarer_ev_expressions(pd, dd))
+            
+            for s in 'SHDCN':
+                expressions.extend(self._create_strain_ev_expressions(pd, dd, s))
+                
+                for l in range(1, 8):
+                    expressions.extend(self._create_level_ev_expressions(pd, dd, s, l))
+        
+        return expressions
+
+    def _create_basic_ev_expressions(self, pd):
+        return [
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_V_Max'))
+              .otherwise(pl.col(f'EV_{pd}_NV_Max'))
+              .alias(f'EV_Max_{pd}'),
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_V_Max_Col'))
+              .otherwise(pl.col(f'EV_{pd}_NV_Max_Col'))
+              .alias(f'EV_Max_Col_{pd}')
+        ]
+
+    def _create_declarer_ev_expressions(self, pd, dd):
+        return [
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_{dd}_V_Max'))
+              .otherwise(pl.col(f'EV_{pd}_{dd}_NV_Max'))
+              .alias(f'EV_{pd}_{dd}_Max'),
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_{dd}_V_Max_Col'))
+              .otherwise(pl.col(f'EV_{pd}_{dd}_NV_Max_Col'))
+              .alias(f'EV_{pd}_{dd}_Max_Col')
+        ]
+
+    def _create_strain_ev_expressions(self, pd, dd, s):
+        return [
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_{dd}_{s}_V_Max'))
+              .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_Max'))
+              .alias(f'EV_{pd}_{dd}_{s}_Max'),
+            pl.when(self.vul_conditions[pd])
+              .then(pl.col(f'EV_{pd}_{dd}_{s}_V_Max_Col'))
+              .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_Max_Col'))
+              .alias(f'EV_{pd}_{dd}_{s}_Max_Col')
+        ]
+
+    def _create_level_ev_expressions(self, pd, dd, s, l):
+        return [
+            pl.when(self.vul_conditions[pd])
+            .then(pl.col(f'EV_{pd}_{dd}_{s}_{l}_V'))
+            .otherwise(pl.col(f'EV_{pd}_{dd}_{s}_{l}_NV'))
+            .alias(f'EV_{pd}_{dd}_{s}_{l}')
+        ]
+
+    def _create_diff_columns(self):
+        # First create the initial diff columns
+        self.df = self._time_operation(
+            "create_initial_diff_columns",
+            lambda df: df.with_columns([
+                pl.Series('Par_Diff_NS', (df['Score_NS']-df['Par_NS']), pl.Int16),
+                pl.Series('Par_Diff_EW', (df['Score_EW']-df['Par_EW']), pl.Int16),
+                pl.Series('DD_Tricks_Diff', (df['Tricks'].cast(pl.Int8)-df['DD_Tricks'].cast(pl.Int8)), pl.Int8, strict=False),
+                pl.Series('EV_Max_Diff_NS', df['Score_NS'] - df['EV_Max_NS'], pl.Float32),
+                pl.Series('EV_Max_Diff_EW', df['Score_EW'] - df['EV_Max_EW'], pl.Float32),
+            ]),
+            self.df
+        )
+
+        # Then create Par_Diff_EW using the now-existing Par_Diff_NS
+        self.df = self._time_operation(
+            "create_parscore_diff_ew",
+            lambda df: df.with_columns([
+                pl.Series('Par_Diff_EW', -df['Par_Diff_NS'], pl.Int16)
+            ]),
+            self.df
+        )
+
+    def perform_hand_augmentations(self):
+        """Main method to perform all hand augmentations"""
+        self._add_default_columns()
+        self._create_hand_columns()
+        scores_df = self._process_scores_and_tricks()
+        self._process_contract_columns()
+        self._create_contract_types()
+        self._create_direction_columns()
+        self._create_declarer_columns()
+        self._create_result_columns()
+        self._create_dd_columns()
+        self._create_score_columns()
+        self._create_ev_columns()
+        self._create_diff_columns()
+        return self.df
 
 class ResultAugmenter:
     def __init__(self, df, hrs_d=None):
@@ -1463,72 +1383,6 @@ class ResultAugmenter:
         self._create_balanced_indicators()
         return self.df
 
-# additional augmentations for ACBL hand records
-def AugmentACBLHandRecords(df,hrs_d):
-
-    augmenter = HandAugmenter(df, hrs_d, sd_productions=40, progress=None)
-    df = augmenter.perform_hand_augmentations()
-
-    # takes 5s
-    if 'game_date' in df.columns:
-        t = time.time()
-        df = df.with_columns(pl.Series('Date',df['game_date'].str.strptime(pl.Date,'%Y-%m-%d %H:%M:%S')))
-        print(f"Time to create ACBL Date: {time.time()-t} seconds")
-    # takes 5s
-    if 'hand_record_id' in df.columns:
-        t = time.time()
-        df = df.with_columns(
-            pl.col('hand_record_id').cast(pl.String),
-        )
-        print(f"Time to create ACBL hand_record_id: {time.time()-t} seconds")
-    return df
-
-
-def Perform_Legacy_Renames(df):
-
-    df = df.with_columns([
-        #pl.col('Section').alias('section_name'), # will this be needed for acbl?
-        pl.col('N').alias('Player_Name_N'),
-        pl.col('S').alias('Player_Name_S'),
-        pl.col('E').alias('Player_Name_E'),
-        pl.col('W').alias('Player_Name_W'),
-        pl.col('Declarer_Name').alias('Name_Declarer'),
-        pl.col('Declarer_ID').alias('Number_Declarer'), #  todo: rename to 'Declarer_ID'?
-        pl.col('Declarer_Direction').replace_strict(mlBridgeLib.PlayerDirectionToPairDirection).alias('Declarer_Pair_Direction'),
-
-        # EV legacy renames
-        pl.col('EV_MaxCol').alias('SDContract_Max'), # Pair direction invariant.
-        pl.col('EV_NS_Max').alias('SDScore_NS'),
-        pl.col('EV_EW_Max').alias('SDScore_EW'),
-        pl.col('EV_NS_Max').alias('SDScore_Max_NS'),
-        pl.col('EV_EW_Max').alias('SDScore_Max_EW'),
-        (pl.col('EV_NS_Max')-pl.col('Score_NS')).alias('SDScore_Diff_NS'),
-        (pl.col('EV_EW_Max')-pl.col('Score_EW')).alias('SDScore_Diff_EW'),
-        (pl.col('EV_NS_Max')-pl.col('Score_NS')).alias('SDScore_Max_Diff_NS'),
-        (pl.col('EV_EW_Max')-pl.col('Score_EW')).alias('SDScore_Max_Diff_EW'),
-        (pl.col('EV_NS_Max')-pl.col('Pct_NS')).alias('SDPct_Diff_NS'),
-        (pl.col('EV_EW_Max')-pl.col('Pct_EW')).alias('SDPct_Diff_EW'),
-        ])
-    return df
-
-
-def Create_Fake_Predictions(df):
-    # todo: remove this once NN predictions are implemented
-    df = df.with_columns(
-
-        # pl.col('Pct_NS').alias('Pct_NS_Pred'),
-        # pl.col('Pct_EW').alias('Pct_EW_Pred'),
-        # pl.col('Pct_NS').sub(pl.col('Pct_NS')).alias('Pct_NS_Diff_Pred'),
-        # pl.col('Pct_EW').sub(pl.col('Pct_EW')).alias('Pct_EW_Diff_Pred'),
-        # pl.col('Declarer_Direction').alias('Declarer_Direction_Pred'), # Declarer_Direction_Actual not needed
-        # pl.lit(.321).alias('Declarer_Pct_Pred'), # todo: implement 'Declarer_Pct'
-        # pl.lit(456).alias('Declarer_Number_Pred'), # todo: implement 'Declarer_ID'
-        # pl.col('Declarer_Name').alias('Declarer_Name_Pred'),
-        # pl.col('Contract').alias('Contract_Pred'),
-    )
-    return df
-
-
 class DDSDAugmenter:
     def __init__(self, df):
         self.df = df
@@ -1563,7 +1417,7 @@ class DDSDAugmenter:
                     pl.col('Declarer_Direction'),
                     pl.col('BidSuit'),
                     pl.col('BidLvl').cast(pl.String),
-                ], separator='_').alias('Declarer_SDContract'),
+                ], separator='_').alias('EV_Score_Col_Declarer'),
                 
                 pl.when(pl.col('Declarer_Pair_Direction').eq(pl.lit('NS')))
                 .then(pl.col('Score_NS'))
@@ -1571,9 +1425,9 @@ class DDSDAugmenter:
                 .alias('Score_Declarer'),
                 
                 pl.when(pl.col('Declarer_Pair_Direction').eq(pl.lit('NS')))
-                .then(pl.col('ParScore_NS'))
-                .otherwise(pl.col('ParScore_EW'))
-                .alias('ParScore_Declarer'),
+                .then(pl.col('Par_NS'))
+                .otherwise(pl.col('Par_EW'))
+                .alias('Par_Declarer'),
                 
                 ((pl.col('Declarer_Pair_Direction').eq('NS') & pl.col('Vul_NS')) | 
                  (pl.col('Declarer_Pair_Direction').eq('EW') & pl.col('Vul_EW')))
@@ -1594,7 +1448,7 @@ class DDSDAugmenter:
                         lambda row, current_t=t: None if row["BidSuit"] is None 
                                                   else row[f'Probs_{row["Declarer_Pair_Direction"]}_{row["Declarer_Direction"]}_{row["BidSuit"]}_{current_t}'],
                         return_dtype=pl.Float32
-                    ).alias(f'SDProbs_Taking_{t}') # todo: short form of 'Declarer_SDProbs_Taking_{t}'
+                    ).alias(f'Prob_Taking_{t}') # todo: short form of 'Declarer_SD_Probs_Taking_{t}'
                     for t in range(14)
                 ]
             ]),
@@ -1625,7 +1479,7 @@ class DDSDAugmenter:
                     lambda r: None if r['Direction_Dummy'] is None else r[f'Player_ID_{r["Direction_Dummy"]}'],
                     return_dtype=pl.String
                 ).alias('Dummy'),
-                pl.col('Score_Declarer').le(pl.col('ParScore_Declarer')).alias('Defender_ParScore_GE')
+                pl.col('Score_Declarer').le(pl.col('Par_Declarer')).alias('Defender_Par_GE')
             ]),
             self.df
         )
@@ -1656,9 +1510,9 @@ class DDSDAugmenter:
         self.df = self._time_operation(
             "create board result columns",
             lambda df: df.with_columns([
-                pl.struct(['Declarer_SDContract','^EV_(NS|EW)_[NESW]_[SHDCN]_[1-7]$'])
-                    .map_elements(lambda x: None if x['Declarer_SDContract'] is None else x[x['Declarer_SDContract']],
-                                return_dtype=pl.Float32).alias('SDScore'),
+                pl.struct(['EV_Score_Col_Declarer','^EV_(NS|EW)_[NESW]_[SHDCN]_[1-7]$'])
+                    .map_elements(lambda x: None if x['EV_Score_Col_Declarer'] is None else x[x['EV_Score_Col_Declarer']],
+                                return_dtype=pl.Float32).alias('EV_Score_Declarer'),
                 pl.struct(['BidLvl', 'BidSuit', 'Tricks', 'Vul_Declarer', 'Dbl'])
                     .map_elements(lambda x: all_scores_d.get(tuple(x.values()),None),
                                 return_dtype=pl.Int16)
@@ -1683,7 +1537,7 @@ class DDSDAugmenter:
                 (pl.col('Result') == 0).alias('JustMade'),
                 (pl.col('Result') < 0).alias('UnderTricks'),
                 pl.col('Tricks').alias('Tricks_Declarer'),
-                (pl.col('Tricks') - pl.col('DDTricks')).alias('Tricks_DD_Diff_Declarer'),
+                (pl.col('Tricks') - pl.col('DD_Tricks')).alias('Tricks_DD_Diff_Declarer'),
             ]),
             self.df
         )
@@ -1697,13 +1551,13 @@ class DDSDAugmenter:
                     .over('Number_Declarer')
                     .alias('Declarer_Rating'),
 
-                pl.col('Defender_ParScore_GE')
+                pl.col('Defender_Par_GE')
                     .cast(pl.Float32)
                     .mean()
                     .over('OnLead')
                     .alias('Defender_OnLead_Rating'),
 
-                pl.col('Defender_ParScore_GE')
+                pl.col('Defender_Par_GE')
                     .cast(pl.Float32)
                     .mean()
                     .over('NotOnLead')
@@ -1722,4 +1576,183 @@ class DDSDAugmenter:
         self._create_board_result_columns()
         self._create_trick_columns()
         self._create_rating_columns()
+        return self.df
+
+
+class MatchPointAugmenter:
+    def __init__(self, df):
+        self.df = df
+        self.discrete_score_columns = [] # ['DD_Score_NS', 'EV_Max_NS'] # calculate matchpoints for these columns which change with each row's Score_NS
+        self.dd_score_columns = [f'DD_Score_{l}{s}_{d}' for d in 'NESW' for s in 'SHDCN' for l in range(1,8)]
+        self.ev_score_columns = [f'EV_{pd}_{d}_{s}_{l}' for pd in ['NS','EW'] for d in pd for s in 'SHDCN' for l in range(1,8)]
+        self.all_score_columns = self.discrete_score_columns + self.dd_score_columns + self.ev_score_columns
+
+    def _time_operation(self, operation_name, func, *args, **kwargs):
+        t = time.time()
+        result = func(*args, **kwargs)
+        print(f"{operation_name}: time:{time.time()-t} seconds")
+        return result
+
+    def _create_mp_top(self):
+        if 'MP_Top' not in self.df.columns:
+            self.df = self._time_operation(
+                "create MP_Top",
+                lambda df: df.with_columns(
+                    pl.col('Score').count().over(['session_id','PBN','Board']).sub(1).alias('MP_Top')
+                ),
+                self.df
+            )
+
+    def _calculate_matchpoints(self):
+        if 'MP_NS' not in self.df.columns:
+            self.df = self._time_operation(
+                "calculate matchpoints MP_(NS|EW)",
+                lambda df: df.with_columns([
+                    pl.col('Score_NS').rank(method='average', descending=False).sub(1)
+                        .over(['session_id', 'PBN', 'Board']).alias('MP_NS'),
+                    pl.col('Score_EW').rank(method='average', descending=False).sub(1)
+                        .over(['session_id', 'PBN', 'Board']).alias('MP_EW'),
+                ]),
+                self.df
+            )
+
+    def _calculate_percentages(self):
+        if 'Pct_NS' not in self.df.columns:
+            self.df = self._time_operation(
+                "calculate matchpoints percentages",
+                lambda df: df.with_columns([
+                    (pl.col('MP_NS') / pl.col('MP_Top')).alias('Pct_NS'),
+                    (pl.col('MP_EW') / pl.col('MP_Top')).alias('Pct_EW')
+                ]),
+                self.df
+            )
+
+    def _create_declarer_pct(self):
+        if 'Declarer_Pct' not in self.df.columns:
+            self.df = self._time_operation(
+                "create Declarer_Pct",
+                lambda df: df.with_columns(
+                    pl.when(pl.col('Declarer_Direction').is_in(['N','S']))
+                    .then('Pct_NS')
+                    .otherwise('Pct_EW')
+                    .alias('Declarer_Pct')
+                ),
+                self.df
+            )
+
+
+    def _calculate_matchpoints_group(self, series_list: list[pl.Series]) -> pl.Series:
+        col_values = series_list[0]
+        score_ns_values = series_list[1]
+        if col_values.is_null().sum() > 0:
+            print(f"Warning: Null values in col_values: {col_values.is_null().sum()}")
+        #if score_ns_values.is_null().sum() > 0:
+        #    print(f"Warning: Null values in score_ns_values: {score_ns_values.is_null().sum()}")
+        # todo: is there a more proper way to handle null values in col_values and score_ns_values?
+        score_ns_values = score_ns_values.fill_null(0.0) # todo: why do some have nulls? sitout?
+        col_values = col_values.fill_null(0.0) # todo: why do some have nulls? sitout?
+        return pl.Series([
+            sum(1.0 if val > score else 0.5 if val == score else 0.0 
+                for score in score_ns_values)
+            for val in col_values
+        ])
+
+
+    def _calculate_all_score_matchpoints(self):
+        t = time.time()
+        # if 'Expanded_Scores_List' in self.df.columns: # todo: obsolete?
+        #     print('Calculate matchpoints for existing Expanded_Scores_List column.')
+        #     self.df = calculate_matchpoint_scores_ns(self.df, self.all_score_columns)
+        # else:
+        print('Calculate matchpoints over session, PBN, and Board.')
+        # calc matchpoints on row-by-row basis
+        if self.df['Score_NS'].is_null().sum() > 0:
+            print(f"Warning: Null values in score_ns_values: {self.df['Score_NS'].is_null().sum()}")
+        # for NS scores
+        for col in self.all_score_columns + ['DD_Score_NS', 'Par_NS']:
+            assert 'MP_'+col not in self.df.columns, f"Column 'MP_{col}' already exists in DataFrame"
+            self.df = self.df.with_columns([
+                    pl.map_groups(
+                        exprs=[col, 'Score_NS'],
+                        function=self._calculate_matchpoints_group,
+                        return_dtype=pl.Float64,
+                    ).over(['session_id', 'PBN', 'Board']).alias('MP_'+col)
+                ])
+        # for declarer orientation scores
+        for col in [('DD_Score_Declarer','Score_Declarer'),('Par_Declarer','Score_Declarer'),('EV_Score_Declarer','Score_Declarer'),('EV_Max_Declarer','Score_Declarer')]:
+            assert 'MP_'+col[0] not in self.df.columns, f"Column 'MP_{col[0]}' already exists in DataFrame"
+            self.df = self.df.with_columns([
+                    pl.map_groups(
+                        exprs=col,
+                        function=self._calculate_matchpoints_group,
+                        return_dtype=pl.Float64,
+                    ).over(['session_id', 'PBN', 'Board']).alias('MP_'+col[0])
+                ])
+        print(f"calculate matchpoints all_score_columns: time:{time.time()-t} seconds")
+
+    def _calculate_final_scores(self):
+        t = time.time()
+        
+        # Calculate MP and percentages for discrete scores
+        for col_ns in ['DD_Score_NS','Par_NS']:
+            col_ew = col_ns.replace('NS','EW')
+            self.df = self.df.with_columns(
+                (pl.col('MP_Top')-pl.col(f'MP_{col_ns}')).alias(f'MP_{col_ew}')
+            ).with_columns([
+                (pl.col(f'MP_{col_ns}')/pl.col('MP_Top')).alias(col_ns.replace('_NS','_Pct_NS')),
+                (pl.col(f'MP_{col_ew}')/pl.col('MP_Top')).alias(col_ew.replace('_EW','_Pct_EW')),
+            ])
+        # for declarer orientation scores
+        self.df = self.df.with_columns(
+            (pl.col(f'MP_DD_Score_Declarer')/pl.col('MP_Top')).alias('MP_DD_Pct_Declarer'),
+            (pl.col(f'MP_Par_Declarer')/pl.col('MP_Top')).alias('MP_Par_Pct_Declarer'),
+            (pl.col(f'MP_EV_Score_Declarer')/pl.col('MP_Top')).alias('MP_EV_Pct_Declarer'),
+            (pl.col(f'MP_EV_Max_Declarer')/pl.col('MP_Top')).alias('MP_EV_Max_Pct_Declarer')
+        )
+
+        # Calculate remaining scores and percentages
+        operations = [
+            lambda df: df.with_columns((1-pl.col('Par_Pct_NS')).alias('Par_Pct_EW')),
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[NS]$').alias(f'MP_DD_Score_NS_Max')),
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[EW]$').alias(f'MP_DD_Score_EW_Max')),
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_NS_[NS]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_NS')),
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_EW_[EW]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_EW')),
+            lambda df: df.with_columns([
+                (pl.col('MP_DD_Score_NS_Max')/pl.col('MP_Top')).alias('DD_Score_Pct_NS_Max'),
+                (pl.col('MP_DD_Score_EW_Max')/pl.col('MP_Top')).alias('DD_Score_Pct_EW_Max'),
+                (pl.col('MP_EV_Max_NS')/pl.col('MP_Top')).alias('EV_Pct_Max_NS'),
+                (pl.col('MP_EV_Max_EW')/pl.col('MP_Top')).alias('EV_Pct_Max_EW'),
+                #pl.col('DD_Score_Pct_NS').alias('DD_Pct_NS'),
+                #pl.col('DD_Score_Pct_EW').alias('DD_Pct_EW'),
+                #pl.col('MP_NS').alias('Matchpoints_NS'),
+                #pl.col('MP_EW').alias('Matchpoints_EW'),
+                #pl.col('MP_EV_Max_NS').alias('SD_MP_Max_NS'),
+                #pl.col('MP_Top').sub(pl.col('MP_EV_Max_NS')).alias('SD_MP_Max_EW'),
+            ]),
+            lambda df: df.with_columns([
+                #pl.col('EV_Pct_Max_NS').alias('SD_Pct_NS'),
+                #pl.col('EV_Pct_Max_EW').alias('SD_Pct_EW'),
+                #pl.col('EV_Pct_Max_NS').alias('SD_Pct_Max_NS'),
+                #pl.col('EV_Pct_Max_EW').alias('SD_Pct_Max_EW'),
+                (pl.col('EV_Pct_Max_NS')-pl.col('Pct_NS')).alias('EV_Pct_Max_Diff_NS'),
+                (pl.col('EV_Pct_Max_EW')-pl.col('Pct_EW')).alias('EV_Pct_Max_Diff_EW'),
+                (pl.col('Par_Pct_NS')-pl.col('Pct_NS')).alias('EV_Par_Pct_Diff_NS'),
+                (pl.col('Par_Pct_EW')-pl.col('Pct_EW')).alias('EV_Par_Pct_Diff_EW'),
+                (pl.col('Par_Pct_NS')-pl.col('Pct_NS')).alias('EV_Par_Pct_Max_Diff_NS'),
+                (pl.col('Par_Pct_EW')-pl.col('Pct_EW')).alias('EV_Par_Pct_Max_Diff_EW'),
+            ])
+        ]
+
+        for operation in operations:
+            self.df = operation(self.df)
+
+        print(f"Time to rank expanded scores: {time.time()-t} seconds")
+
+    def perform_matchpoint_augmentations(self):
+        self._create_mp_top()
+        self._calculate_matchpoints()
+        self._calculate_percentages()
+        self._create_declarer_pct()
+        self._calculate_all_score_matchpoints()
+        self._calculate_final_scores()
         return self.df
