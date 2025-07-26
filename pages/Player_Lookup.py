@@ -34,9 +34,8 @@ with st.spinner(text="Reading data ..."):
     acbl_player_name_dict_filename = 'acbl_player_info.parquet'
     acbl_player_name_dict_file = dataPath.joinpath(acbl_player_name_dict_filename)
     acbl_player_df = bridgestatslib.load_player_info_df(acbl_player_name_dict_file)
-    acbl_player_df_collected = acbl_player_df.collect()
     end_time = time.time()
-    st.caption(f"Data read completed in {round(end_time-start_time,2)} seconds. {acbl_player_df_collected.height} rows read.")
+    st.caption(f"Data read completed in {round(end_time-start_time,2)} seconds. {acbl_player_df.height} rows read.")
 
 # clubs can be: [] [108571] FTBC, [267096] FLQT, [204891] HH
 clubs = st.sidebar.text_input('Narrow search to these ACBL club numbers. Enter one or more 6 digit ACBL club numbers (empty means all):', placeholder='Enter list of ACBL club numbers', key=key_prefix+'-Club', help='Example: 108571 (Fort Lauderdale Bridge Club')
@@ -67,21 +66,18 @@ selected_df = selected_df if len(player_names_regex)==0 else selected_df.filter(
 # Drop master point columns per ACBL privacy requirements
 selected_df = selected_df.drop(selected_df.select(pl.col("^mp_.*$")).columns)
 
-# Collect the filtered DataFrame
-selected_df_collected = selected_df.collect()
-
 table, charts = st.tabs(["Data Table", "Charts"])
 
-st.caption(f"Database has {acbl_player_df_collected.height} rows. {selected_df_collected.height} rows selected.")
+st.caption(f"Database has {acbl_player_df.height} rows. {selected_df.height} rows selected.")
 
-if selected_df_collected.height == 0:
+if selected_df.height == 0:
     st.warning('No rows selected')
     st.stop()
 
 with table:
     with st.spinner(text="Creating data table ..."):
         start_time = time.time()
-        streamlitlib.ShowDataFrameTable(selected_df_collected)
+        streamlitlib.ShowDataFrameTable(selected_df)
         end_time = time.time()
         st.caption(f"Data table created in {round(end_time-start_time,2)} seconds.")
 
@@ -90,7 +86,7 @@ with charts:
         start_time = time.time()
         
         # Convert to pandas for Altair
-        chart_df = selected_df_collected.to_pandas()
+        chart_df = selected_df.to_pandas()
         
         col = 'rank_description'
         x = f'count({col}):Q'

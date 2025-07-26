@@ -17,12 +17,12 @@ import streamlitlib # must be placed after sys.path.append. vscode re-format lik
 
 @st.cache_resource()
 def load_club_hand_records(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
 def load_club_board_results(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
@@ -39,22 +39,22 @@ def load_club_hand_records_d(filename):
 
 @st.cache_resource()
 def load_tournament_hand_records(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
 def load_tournament_board_results(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
 def load_player_info_df(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
 def load_club_df(filename):
-    return pl.scan_parquet(filename)
+    return pl.read_parquet(filename)
 
 
 @st.cache_resource()
@@ -67,13 +67,6 @@ def load_tournament_player_d(filename):
 def load_tournament_hand_records_d(filename):
     with open(filename, 'rb') as f:
         return pickle.load(f)
-
-
-# Helper function for DuckDB queries
-def duckdb_arrow_to_df(board_results_arrow, query):
-    # Convert LazyFrame to Arrow table first
-    arrow_table = board_results_arrow.collect().to_arrow()
-    return pl.from_arrow(duckdb.arrow(arrow_table).query('arrow_table', query).arrow())
 
 
 # todo: is this obsolete? Seems to freeze or slow webpages.
@@ -110,6 +103,11 @@ def CreateCheckBoxesFromColumns(column_names,mandatory_columns,special_columns,s
 
 # todo: remove stat_column in favor of column_filter?
 def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
+    # Check if dataframe is empty
+    if selected_df.height == 0:
+        st.info("No data available for charts.")
+        return
+    
     # Convert polars DataFrame to pandas for plotting
     # This is temporary until we implement native polars plotting
     selected_df_pd = selected_df.to_pandas()
@@ -154,8 +152,20 @@ def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
                         players_d[f'({declarer},{declarer_name},{len(vc)})'] = vc
                 
                 title = f"Frequency Percentage of {', '.join(stat_column_split)} {', '.join(players_d.keys())}"
-                ax = pd.DataFrame(players_d).plot(kind='bar',figsize=figsize,title=title)
-                ax.legend(title='(Player Number, Player Name, Rows Found, Mean)')
+                if players_d:  # Check if players_d is not empty
+                    try:
+                        df_to_plot = pd.DataFrame(players_d)
+                        if df_to_plot.empty or df_to_plot.shape[0] == 0:
+                            st.info(f"No data to plot for chart: {', '.join(stat_column_split)}")
+                            continue
+                        ax = df_to_plot.plot(kind='bar',figsize=figsize,title=title)
+                        ax.legend(title='(Player Number, Player Name, Rows Found, Mean)')
+                    except Exception as e:
+                        st.warning(f"Failed to create chart for {', '.join(stat_column_split)}: {str(e)}")
+                        continue
+                else:
+                    st.info(f"No data available for chart: {', '.join(stat_column_split)}")
+                    continue
             else:
                 selected_cols = selected_df.select(stat_column_split).to_pandas()
                 ax = selected_cols.hist(figsize=figsize)
@@ -168,7 +178,6 @@ def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
                     selected_df
                     .group_by([stat_column_split[0], stat_column_split[1]])
                     .agg(pl.col(stat_column_split[2]).mean())
-                    .collect()
                     .pivot(
                         values=stat_column_split[2],
                         index=stat_column_split[0],
@@ -190,13 +199,25 @@ def ShowCharts(selected_df,selected_charts,stat_column=None,column_filter='.*'):
                     else:
                         d[col] = s.value_counts(normalize=True).sort_index()
                 
-                ax = pd.DataFrame(d).plot(
-                    kind='bar',
-                    xlabel=stat_column_split,
-                    ylabel="Percentage Frequency",
-                    title=f"Frequency of {', '.join(d.keys())} values. {selected_df_len} observations.",
-                    figsize=figsize
-                )
+                if d:  # Check if d is not empty
+                    try:
+                        df_to_plot = pd.DataFrame(d)
+                        if df_to_plot.empty or df_to_plot.shape[0] == 0:
+                            st.info(f"No data to plot for chart: {', '.join(stat_column_split)}")
+                            continue
+                        ax = df_to_plot.plot(
+                            kind='bar',
+                            xlabel=stat_column_split,
+                            ylabel="Percentage Frequency",
+                            title=f"Frequency of {', '.join(d.keys())} values. {selected_df_len} observations.",
+                            figsize=figsize
+                        )
+                    except Exception as e:
+                        st.warning(f"Failed to create chart for {', '.join(stat_column_split)}: {str(e)}")
+                        continue
+                else:
+                    st.info(f"No data available for chart: {', '.join(stat_column_split)}")
+                    continue
                 st.pyplot(plt,clear_figure=True)
                 del d
                 

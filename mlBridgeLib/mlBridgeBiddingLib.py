@@ -77,12 +77,7 @@ class ExpressionEvaluator:
         stack = []
         output = []
         
-        print("Starting conversion...")  # Debug
-        
         for token in tokens:
-            print(f"\nToken: {token}")  # Debug
-            print(f"Stack before: {stack}")  # Debug
-            print(f"Output before: {output}")  # Debug
             
             # Operands go directly to output
             if token.isnumeric() or re.match(r'\b[a-zA-Z_]\w*\b', token):
@@ -105,15 +100,12 @@ class ExpressionEvaluator:
                     output.append(stack.pop())
                 if stack:
                     stack.pop()  # Remove '('
-                    
-            print(f"Stack after: {stack}")  # Debug
-            print(f"Output after: {output}")  # Debug
+
         
         # Pop remaining operators from stack to output
         while stack:
             output.append(stack.pop())
         
-        print(f"\nFinal output: {output}")  # Debug
         return tuple(output)
 
 
@@ -145,10 +137,7 @@ class ExpressionEvaluator:
     def evaluate_postfix_vectorized(self, postfix_expr, df):
         """Evaluate a postfix expression using vectorized operations."""
         stack = []
-        
-        #print(f"Evaluating postfix expression: {postfix_expr}")  # Debug print
         for token in postfix_expr:
-            #print(f"Processing token: {token}, Current stack: {[type(x) for x in stack]}")  # Debug print
             if token.isnumeric():
                 stack.append(np.full(len(df), int(token)))
             elif token in self.ops:

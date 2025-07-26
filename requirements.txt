@@ -16,7 +16,7 @@ streamlit-extras
 seaborn
 reportlab
 markdown
-bs4
+beautifulsoup4
 aiohttp
 requests
 scikit-learn

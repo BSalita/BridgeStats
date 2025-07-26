@@ -39,7 +39,7 @@ from endplay.dds import par, calc_all_tables
 
 # declare module read-only variables
 CDHS = 'CDHS' # string ordered by suit rank - low to high
-CDHSN = CDHS+'N' # string ordered by strain
+CDHSN = 'CDHSN' # string ordered by suit rank - low to high including N for no trump
 NSHDC = 'NSHDC' # order by highest score value. useful for idxmax(). coincidentally reverse of CDHSN.
 SHDC = 'SHDC' # Hands, PBN, board_record_string (brs) ordering
 NSEW = 'NSEW' # double dummy solver ordering
@@ -77,30 +77,37 @@ declarer_direction_to_pair_direction = {'N':'NS','S':'NS','E':'EW','W':'EW'}
 # creates a dict all possible opening bids in auction order. key is npasses and values are opening bids.
 auction_order = [level+suit for level in '1234567' for suit in 'CDHSN']+['x','xx','p'] # todo: put into mlBridgeLib
 
+# Common direction mappings
 Direction_to_NESW_d = {
-    '0':'N',
-    '1':'E',
-    '2':'S',
-    '3':'W',
-    'north':'N',
-    'east':'E',
-    'south':'S',
-    'west':'W',
-    'North':'N',
-    'East':'E',
-    'South':'S',
-    'West':'W',
-    'N':'N',
-    'E':'E',
-    'S':'S',
-    'W':'W',
-    'n':'N',
-    'e':'E',
-    's':'S',
-    'w':'W',
-    None:None, # PASS
-    '':'' # PASS
+    'N': 'N',
+    'E': 'E',
+    'S': 'S',
+    'W': 'W',
+    'North': 'N',
+    'East': 'E',
+    'South': 'S',
+    'West': 'W',
+    'north': 'N',
+    'east': 'E',
+    'south': 'S',
+    'west': 'W', # only 'west' is used in ACBL data, not 'north', 'east', or 'south'. not sure why.
+    '': '', # passed-out so no declarer direction
 }
+
+# List of all possible contract strings
+contract_classes = [f"{level}{strain}{dbl}" for level in range(1,8) for strain in ['C','D','H','S','N'] for dbl in ['','X','XX']] + ['Pass']
+
+# List of all possible strains
+strain_classes = ['C', 'D', 'H', 'S', 'N']
+
+# List of all possible bid levels
+level_classes = list(range(1,8))
+
+# List of all possible double states
+dbl_classes = ['', 'X', 'XX']
+
+# List of all possible directions
+direction_classes = ['N', 'E', 'S', 'W']
 
 Strain_to_CDHSN_d = {
     'spades':'S',
@@ -400,8 +407,9 @@ def brs_to_pbn(brs,void='',ten='T'):
     r = r'S(.*)H(.*)D(.*)C(.*)'
     rs = r*4
     suits = [suit for suit in re.match(rs,brs).groups()]
-    return 'N:'+' '.join(['.'.join(suits[i*4:i*4+4]) for i in [0,2,3,1]]).replace('10',ten).replace('-',void) # brs uses NWES order but we want NESW. void may or not contain '-'
-
+    pbn = 'N:'+' '.join(['.'.join(suits[i*4:i*4+4]) for i in [0,2,3,1]]).replace('10',ten).replace('-',void) # brs uses NWES order but we want NESW. void may or not contain '-'
+    pbn = Deal(pbn).to_pbn() # todo: too much overhead to use as validation. Problem is reversed order of cards in a suit.
+    return pbn
 
 def brs_to_hands(brs,void='',ten='T'):
     no_10s = brs.replace('10',ten).replace('-',void) # replace 10 with T and remove unnecessary '-' which signifies a void suit.
@@ -582,6 +590,7 @@ def ContractTypeFromContract(contract):
     return ContractType(tricks,suit)
 
 
+# Returns a dict of contract types by direction by suit. Used to create a dataframe of contract types by direction by suit. Unsuitable for concat().
 def CategorifyContractTypeBySuit(ddmakes):
     contract_types_d = defaultdict(list)
     for dd in ddmakes:
@@ -656,7 +665,7 @@ def ContractToScores(df,direction='Declarer_Direction',cache={}):
     scores_l = []
     for bidlvl,bidsuit,direction,ivul,dbl in df[['BidLvl','BidSuit',direction,'iVul','Dbl']].to_numpy(): # rows: # convert df to list of tuples
         if np.isnan(bidlvl) or bidlvl is None or bidlvl == 0: # Contract of 'PASS' in which case BidSuit and Dbl are nulls.
-            scores = [[0]*14]
+            scores = [None]*14
         elif (bidlvl,bidsuit,direction,ivul,dbl) in cache:
 
             scores = cache[(bidlvl,bidsuit,direction,ivul,dbl)]

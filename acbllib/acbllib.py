@@ -29,15 +29,21 @@ import sqlalchemy_utils
 from sqlalchemy_utils.functions import database_exists, create_database
 sys.path.append(str(pathlib.Path.cwd().parent.parent.joinpath('mlBridgeLib'))) # removed .parent
 sys.path
-import mlBridgeLib
+from mlBridgeLib.mlBridgeLib import json_to_sql_walk, CreateSqlFile
 
 
 def get_club_results(cns, base_url, acbl_url, acblPath, read_local):
     htmls = {}
     total_clubs = len(cns)
     failed_urls = []
-    #headers={"user-agent":None} # Not sure why this has become necessary
-    headers={"user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36"}
+    #headers = {"user-agent":None} # Not sure why this has become necessary
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
     for ncn,cn in enumerate(sorted(cns)):
         ncn += 1
         url = base_url+str(cn)+'/'
@@ -64,7 +70,7 @@ def get_club_results(cns, base_url, acbl_url, acblPath, read_local):
             # pathlib.Path.mkdir(path.parent, parents=True, exist_ok=True)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(html, encoding="utf-8")
-            time.sleep(1) # need to self-throttle otherwise acbl returns 403 "forbidden". obsolete?
+            time.sleep(2) # need to self-throttle otherwise acbl returns 403 "forbidden". obsolete?
         htmls[str(cn)] = html
     print_to_log_info(f'Failed Urls: len:{len(failed_urls)} Urls:{failed_urls}')
     print_to_log_info(f"Done: Total clubs processed:{total_clubs}: Total url failures:{len(failed_urls)}")
@@ -115,7 +121,13 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
     total_urls_processed = 0
     total_local_files_read = 0
     #headers={"user-agent":None} # Not sure why this has become necessary. Failed 2021-Sep-02 so using Chrome curl user-agent.
-    headers={"user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
     for ndf,(kdf,df) in enumerate(filtered_clubs.items()):
         if ndf < starting_nclub or ndf >= ending_nclub:
             #print_to_log_info(f"Skipping club #{ndf} {kdf}") # obsolete when filtered_clubs works
@@ -173,7 +185,9 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
                 # some clubs return 200 (ok) but with instructions to login (len < 200).
                 # skip clubs returning errors or tiny files. assumes one failed club result will be true for all club's results.
                 if r.status_code != 200 or len(html) < 200:
+                    print_to_log_info(f'Error: {r.status_code} len:{len(html)} {url}. Waiting 60s.')
                     failed_urls.append(url)
+                    time.sleep(60) # wait 1 minute before retrying.
                     break
                 # pathlib.Path.mkdir(html_path.parent, parents=True, exist_ok=True)
                 html_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +207,7 @@ def extract_club_result_json(dfs, filtered_clubs, starting_nclub, ending_nclub, 
                                 json.dump(data_json, f, indent=2)
                             bbo_tournament_id = data_json["bbo_tournament_id"]
                             print_to_log_info(f'bbo_tournament_id: {bbo_tournament_id}')
-                #time.sleep(1) # obsolete?
+                time.sleep(2) # need to self-throttle otherwise acbl returns 403 "forbidden". looks like sleep of 1 second has become insufficient in 2025-Jun.
             # if no data_json file read, must be an error so delete both html and json files.
             if not data_json:
                 html_path.unlink(missing_ok=True)
@@ -238,9 +252,9 @@ def club_results_json_to_sql(urls, starting_nfile=0, ending_nfile=0, initially_d
                 continue
             tables = defaultdict(lambda :defaultdict(dict))
             primary_keys = ['id']
-            mlBridgeLib.json_to_sql_walk(tables,"events","","",data_json,primary_keys) # "events" is the main table.
+            json_to_sql_walk(tables,"events","","",data_json,primary_keys) # "events" is the main table.
             with open(sql_file,'w', encoding='utf-8') as f:
-                mlBridgeLib.CreateSqlFile(tables,f,primary_keys)
+                CreateSqlFile(tables,f,primary_keys)
             total_files_written += 1
         except Exception as e:
             print_to_log_info(f"Error: {e}: type:{data_json['type']} file:{url.as_posix()}")
@@ -336,7 +350,7 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
             print_to_log_info(f"Performing integrity_check on file")
             raw_connection.execute("PRAGMA integrity_check;") # takes 25m on disk
         if not write_direct_to_disk:
-            print_to_log_info(f"Writing memory db to file (takes 1+ hours):{db_file_connection_string}")
+            print_to_log_info(f"Writing memory db to file:{db_file_connection_string}")
             engine_file = sqlalchemy.create_engine(db_file_connection_string)
             raw_connection_file = engine_file.raw_connection()
             raw_connection.backup(raw_connection_file.connection) # takes 45m
@@ -352,7 +366,13 @@ def club_results_create_sql_db(db_file_connection_string, create_tables_sql_file
 
 def get_club_results_details_data(url):
     print_to_log_info('details url:',url)
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
     # todo: use some get...() for 'https://my.acbl.org/club-results/details/993420'
     response = requests.get(url, headers=headers)
     assert response.status_code == 200, [url, response.status_code]
@@ -400,7 +420,13 @@ def get_club_results_details_data(url):
 def get_club_results_from_acbl_number(acbl_number):
     url = f"https://my.acbl.org/club-results/my-results/{acbl_number}"
     print_to_log_info('my-results url:',url)
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
     response = requests.get(url, headers=headers)
     assert response.status_code == 200, [url, response.status_code]
 
@@ -432,7 +458,12 @@ def get_club_player_history(acbl_number):
 def get_tournament_session_results(session_id, acbl_api_key):
     headers = {
         'accept': 'application/json', 
-        'Authorization': f'Bearer {acbl_api_key}'
+        'Authorization': f'Bearer {acbl_api_key}',
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
     }
     path = 'https://api.acbl.org/v1/tournament/session'
     query = {'id':session_id,'full_monty':1}
@@ -454,10 +485,15 @@ def get_tournament_sessions_from_acbl_number(acbl_number, acbl_api_key):
 def download_tournament_player_history(player_id, acbl_api_key):
     headers = {
         'accept': 'application/json', 
-        'Authorization': f'Bearer {acbl_api_key}'
+        'Authorization': f'Bearer {acbl_api_key}',
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
     }
     path = 'https://api.acbl.org/v1/tournament/player/history_query'
-    query = {'acbl_number':player_id,'page':1,'page_size':200,'start_date':'1900-01-01'}
+    query = {'acbl_number':player_id,'page':1,'page_size':50,'start_date':'1900-01-01'}
     params = urllib.parse.urlencode(query)
     url = path+'?'+params
     sessions_count = 0
@@ -577,7 +613,12 @@ def download_tournament_players_history(player_ids, acbl_api_key, dirPath):
 #     default_headers = {
 #         'Authorization': f'Bearer {auth_token}',
 #         'Content-Type': 'application/json',
-#         'Accept': 'application/json'
+#         'Accept': 'application/json',
+#         "User-Agent": (
+#             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+#             "AppleWebKit/537.36 (KHTML, like Gecko) "
+#             "Chrome/124.0.0.0 Safari/537.36"
+#         )
 #     }
     
 #     # Merge with any additional headers

@@ -48,21 +48,17 @@ selected_df = acbl_club_df.with_columns([
 selected_df = selected_df if len(clubs_regex)==0 else selected_df.filter(pl.col('id').str.contains(clubs_regex))
 selected_df = selected_df if len(club_names_regex)==0 else selected_df.filter(pl.col('name').str.contains(club_names_regex, ignore_case=True))
 
-# Collect the LazyFrames to get their sizes
-acbl_club_df_collected = acbl_club_df.collect()
-selected_df_collected = selected_df.collect()
-
 table, charts = st.tabs(["Data Table", "Charts"])
 
-st.caption(f"Database has {acbl_club_df_collected.height} rows. {selected_df_collected.height} rows selected.")
-if selected_df_collected.height == 0:
+st.caption(f"Database has {acbl_club_df.height} rows. {selected_df.height} rows selected.")
+if selected_df.height == 0:
     st.warning('No rows selected')
     st.stop()
 
 with table:
     with st.spinner(text="Creating data table ..."):
         start_time = time.time()
-        streamlitlib.ShowDataFrameTable(selected_df_collected)
+        streamlitlib.ShowDataFrameTable(selected_df)
         end_time = time.time()
         st.caption(f"Data table created in {round(end_time-start_time,2)} seconds.")
 
