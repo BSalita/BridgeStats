@@ -50,7 +50,7 @@ def endplay_boards_to_df(boards_d):
             board_d['vulnerability'].append(b._vul) # None if passed out, weird
             board_d['passout'].append(b._contract.is_passout() if b._contract else None)
             board_d['contract'].append(str(b._contract) if b._contract else None)
-            board_d['level'].append(b._contract.level if b._contract else None)
+            board_d['level'].append(b._contract.level if b._contract and b._contract.level else None) # b._contract.level is can be 0.
             board_d['denom'].append(b._contract.denom.name if b._contract else None)
             board_d['trump'].append(b.deal.trump.name)
             board_d['penalty'].append(b._contract.penalty.name if b._contract else None)
@@ -336,15 +336,6 @@ def convert_endplay_df_to_mlBridge_df(df):
             pl.col('Contract').str.slice(1,1).alias('BidSuit'), # Extract second character (suit) from contract (categorical, yes)
         )
         df = df.with_columns(
-            # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
-            # first NT->N and suit symbols to SHDCN
-            # If BidLvl is None, make Contract None
-            pl.when(pl.col('BidLvl').is_null())
-            .then(None)
-            .otherwise(pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.col('Dbl')+pl.col('Declarer'))
-            .alias('Contract'),
-        )
-        df = df.with_columns(
             pl.Series('trump',df['trump'].replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String),pl.String),# categorical?
         )
         df = df.with_columns(
@@ -395,13 +386,13 @@ def convert_endplay_df_to_mlBridge_df(df):
         # )
     else:
         #pl.Series('passout',df['passout'],pl.Boolean), # todo: make passout a boolean in previous step.
+        # df = df.with_columns(
+        #     # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
+        #     # first NT->N and suit symbols to SHDCN
+        #     pl.Series('Contract',df['contract'],pl.String).str.replace('NT','N').str.replace('♠','S').str.replace('♥','H').str.replace('♦','D').str.replace('♣','C').str.extract(r"^([^-+]*)", 1),
+        # )
         df = df.with_columns(
-            # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
-            # first NT->N and suit symbols to SHDCN
-            pl.Series('Contract',df['contract'],pl.String).str.replace('NT','N').str.replace('♠','S').str.replace('♥','H').str.replace('♦','D').str.replace('♣','C').str.extract(r"^([^-+]*)", 1),
-        )
-        df = df.with_columns(
-            pl.Series('BidLvl',df['level'].cast(pl.UInt8, strict=False),pl.UInt8), # todo: make level a uint8 in previous step.
+            pl.Series('BidLvl',df['level'].cast(pl.UInt8),pl.UInt8), # todo: make level a uint8 in previous step.
         )
         df = df.with_columns(
             pl.Series('BidSuit',df['denom'].replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String),pl.String),# categorical, yes
@@ -454,6 +445,15 @@ def convert_endplay_df_to_mlBridge_df(df):
         df = df.with_columns(
             pl.Series('Player_ID_W',df['Pair_Number_EW']+'_W',pl.String), # todo: fake player id
         )
+    df = df.with_columns(
+        # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
+        # first NT->N and suit symbols to SHDCN
+        # If BidLvl is None, make Contract None
+        pl.when(pl.col('BidLvl').is_null())
+        .then(None)
+        .otherwise(pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.col('Dbl')+pl.col('Declarer_Direction'))
+        .alias('Contract'),
+    )
     df = df.with_columns(
         df['claimed'].cast(pl.Boolean, strict=False),
     )
