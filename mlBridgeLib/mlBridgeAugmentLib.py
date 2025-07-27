@@ -2015,7 +2015,7 @@ class MatchPointAugmenter:
         t = time.time()
         
         # Calculate DD and Par percentages. Technique is to start calc matchpoints then compare dd/par score with all Score values for the same board and then divide by MP_Top + 1.
-        # SELECT Board, Score_NS, DD_Score_NS, MP_DD_Score_NS, DD_Score_Pct_NS, DD_Score_EW, MP_DD_Score_EW, DD_Score_Pct_EW, Par_NS, MP_Par_NS, Par_Pct_NS
+        # SELECT Board, Score_NS, DD_Score_NS, MP_DD_Score_NS, DD_Pct_NS, DD_Score_EW, MP_DD_Score_EW, DD_Pct_EW, Par_NS, MP_Par_NS, Par_Pct_NS
         for col in ['DD_Score']:
             for pair in ['NS','EW']:
                 col_pair = col + '_' + pair
@@ -2068,31 +2068,31 @@ class MatchPointAugmenter:
         # Calculate remaining scores and percentages
         operations = [
             #lambda df: df.with_columns((1-pl.col('Par_Pct_NS')).alias('Par_Pct_EW')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[NS]$').alias(f'MP_DD_Score_NS_Max')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[EW]$').alias(f'MP_DD_Score_EW_Max')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_NS_[NS]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_NS')),
-            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_EW_[EW]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_EW')),
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[NS]$').alias(f'MP_DD_Score_Max_NS')), # actual max score for NS
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_DD_Score_[1-7][SHDCN]_[EW]$').alias(f'MP_DD_Score_Max_EW')), # actual max score for EW
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_NS_[NS]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_NS')), # predicted max score for NS
+            lambda df: df.with_columns(pl.max_horizontal(f'^MP_EV_EW_[EW]_[SHDCN]_[1-7]$').alias(f'MP_EV_Max_EW')), # predicted max score for EW
             lambda df: df.with_columns([
-                (pl.col('MP_DD_Score_NS_Max')/pl.col('MP_Top')).alias('DD_Score_Pct_NS_Max'),
-                (pl.col('MP_DD_Score_EW_Max')/pl.col('MP_Top')).alias('DD_Score_Pct_EW_Max'),
+                (pl.col('MP_DD_Score_Max_NS')/pl.col('MP_Top')).alias('DD_Pct_Max_NS'), # actual max Pct for NS
+                (pl.col('MP_DD_Score_Max_EW')/pl.col('MP_Top')).alias('DD_Pct_Max_EW'), # actual max Pct for EW
                 #(pl.col('MP_EV_Max_NS')/pl.col('MP_Top')).alias('EV_Pct_Max_NS'),
                 #(pl.col('MP_EV_Max_EW')/pl.col('MP_Top')).alias('EV_Pct_Max_EW'),
-                # self._calculate_pct_from_new_score('DD_Score_NS_Max').alias('DD_Score_Pct_NS_Max'),
-                # self._calculate_pct_from_new_score('DD_Score_EW_Max').alias('DD_Score_Pct_EW_Max'),
-                self._calculate_mp_pct_from_new_score('EV_Max_NS').alias('EV_Pct_Max_NS'),
-                self._calculate_mp_pct_from_new_score('EV_Max_EW').alias('EV_Pct_Max_EW'),
+                # self._calculate_pct_from_new_score('MP_DD_Score_Max_NS').alias('DD_Pct_Max_NS'),
+                # self._calculate_pct_from_new_score('MP_DD_Score_Max_EW').alias('DD_Pct_Max_EW'),
+                self._calculate_mp_pct_from_new_score('EV_Max_NS').alias('EV_Pct_Max_NS'), # predicted max Pct for NS
+                self._calculate_mp_pct_from_new_score('EV_Max_EW').alias('EV_Pct_Max_EW'), # predicted max Pct for EW
             ]),
-            # todo: assert self.df['DD_Score_Pct_NS_Max'].between(0,1).all()
-            # todo: assert self.df['DD_Score_Pct_EW_Max'].between(0,1).all()
+            # todo: assert self.df['DD_Pct_Max_NS'].between(0,1).all()
+            # todo: assert self.df['DD_Pct_Max_EW'].between(0,1).all()
             # todo: assert self.df['EV_Pct_Max_NS'].between(0,1).all()
             # todo: assert self.df['EV_Pct_Max_EW'].between(0,1).all()
             lambda df: df.with_columns([
-                (pl.col('Pct_NS')-pl.col('EV_Pct_Max_NS')).alias('EV_Pct_Max_Diff_NS'),
-                (pl.col('Pct_EW')-pl.col('EV_Pct_Max_EW')).alias('EV_Pct_Max_Diff_EW'),
-                (pl.col('Pct_NS')-pl.col('DD_Score_Pct_NS_Max')).alias('EV_Par_Pct_Diff_NS'),
-                (pl.col('Pct_EW')-pl.col('DD_Score_Pct_EW_Max')).alias('EV_Par_Pct_Diff_EW'),
-                (pl.col('Pct_NS')-pl.col('EV_Pct_Max_NS')).alias('EV_Par_Pct_Max_Diff_NS'),
-                (pl.col('Pct_EW')-pl.col('EV_Pct_Max_EW')).alias('EV_Par_Pct_Max_Diff_EW'),
+                (pl.col('Pct_NS')-pl.col('EV_Pct_Max_NS')).alias('EV_Pct_Max_Diff_NS'), # diff between actual Pct and predicted max Pct for NS
+                (pl.col('Pct_EW')-pl.col('EV_Pct_Max_EW')).alias('EV_Pct_Max_Diff_EW'), # diff between actual Pct and predicted max Pct for EW
+                (pl.col('Pct_NS')-pl.col('DD_Pct_Max_NS')).alias('DD_Pct_Max_Diff_NS'), # diff between actual Pct and max DD Pct for NS
+                (pl.col('Pct_EW')-pl.col('DD_Pct_Max_EW')).alias('DD_Pct_Max_Diff_EW'), # diff between actual Pct and max DD Pct for EW
+                (pl.col('DD_Pct_Max_NS')-pl.col('EV_Pct_Max_NS')).alias('DD_EV_Pct_Max_Diff_NS'), # diff between max DD Pct and predicted max Pct for NS
+                (pl.col('DD_Pct_Max_EW')-pl.col('EV_Pct_Max_EW')).alias('DD_EV_Pct_Max_Diff_EW'), # diff between max DD Pct and predicted max Pct for EW
             ])
         ]
 
