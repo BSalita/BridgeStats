@@ -244,13 +244,13 @@ Strain_to_CDHSN_d = {
 # todo: use mlBridgeLib.Vulnerability_to_Vul_d instead?
 Vulnerability_to_Vul_d = {
     0: 'None',
-    1: 'N_S',
-    2: 'E_W',
-    3: 'Both',
+    1: 'Both',
+    2: 'N_S',
+    3: 'E_W',
     '0': 'None',
-    '1': 'N_S',
-    '2': 'E_W',
-    '3': 'Both',
+    '1': 'Both',
+    '2': 'N_S',
+    '3': 'E_W',
     'None': 'None',
     'N_S': 'N_S',
     'E_W': 'E_W',
@@ -269,14 +269,14 @@ Vulnerability_to_Vul_d = {
 EpiVul_to_Vul_NS_Bool_d = {
     0: False,
     1: True,
-    2: False,
-    3: True,
+    2: True,
+    3: False,
 }
 
 EpiVul_to_Vul_EW_Bool_d = {
     0: False,
-    1: False,
-    2: True,
+    1: True,
+    2: False,
     3: True,
 }
 
