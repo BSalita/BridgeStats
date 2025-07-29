@@ -193,10 +193,11 @@ def endplay_boards_to_df(boards_d):
 
 # all these dicts have been copied to mlBridgeLib.py. todo: remove these but requires using import mlBridgeLib.
 Direction_to_NESW_d = {
-    0:'N',
-    1:'E',
-    2:'S',
-    3:'W',
+    # removed because integer values are not compatible with polars replace_strict(return_dtype=pl.String). Fix is to cast(pl.Utf8) before replace_strict().
+    #0:'N',
+    #1:'E',
+    #2:'S',
+    #3:'W',
     '0':'N',
     '1':'E',
     '2':'S',
@@ -324,29 +325,44 @@ def convert_endplay_df_to_mlBridge_df(df):
     # BridgeWeb uses ScoreTable.
     if 'ScoreTable' in df.columns:
         df = df.with_columns(
-           pl.col('Contract').str.replace('NT','N').str.extract(r"^([^-+]*)", 1),
+            # passed out contract in ScoreTable is '-' but throwing kitchen sink at it just in case something changes.
+            pl.when(pl.col('Contract').is_in([None,'','-','PASS'])).then(None).otherwise(pl.col('Contract').str.replace('NT','N').str.extract(r"^([^-+]*)", 1)).alias('Contract'),
         )
         df = df.with_columns(
-            pl.Series('Dbl',df['Contract'].str.slice(2),pl.String), # categorical, yes
+            pl.when(pl.col('Contract').is_null()).then(None).otherwise(pl.col('Contract').str.slice(2)).alias('Dbl'), # categorical, yes
         )
         df = df.with_columns(
-            pl.col('Contract').str.slice(0,1).cast(pl.UInt8, strict=False).alias('BidLvl'), # Extract first character (bid level)
+            pl.when(pl.col('Contract').is_null()).then(None).otherwise(pl.col('Contract').str.slice(0,1).cast(pl.UInt8, strict=False)).alias('BidLvl'), # Extract first character (bid level)
         )
         df = df.with_columns(
-            pl.col('Contract').str.slice(1,1).alias('BidSuit'), # Extract second character (suit) from contract (categorical, yes)
+            pl.when(pl.col('Contract').is_null()).then(None).otherwise(pl.col('Contract').str.slice(1,1)).alias('BidSuit'), # Extract second character (suit) from contract (categorical, yes)
         )
         df = df.with_columns(
             pl.Series('trump',df['trump'].replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String),pl.String),# categorical?
         )
         df = df.with_columns(
-            pl.Series('Declarer_Direction', [Direction_to_NESW_d[d] for d in df['Declarer']], pl.String, strict=False), # todo: using list comprehension instead of type error when using replace_strict().
+            pl.when(pl.col('Contract').is_null())
+            .then(None)
+            .otherwise(pl.col('Declarer').replace_strict(Direction_to_NESW_d))
+            .alias('Declarer_Direction')
         )
+        # Endplay Result is ml Tricks. Also, bug in Endplay ScoreTable makes a PASS's trick count into a Result (Tricks) of 12 but it should be null or something unique.
         df = df.with_columns(
-            pl.Series('Tricks',df['Result'].cast(pl.UInt8, strict=False).fill_nan(0),pl.UInt8),
+            pl.when(pl.col('Contract').is_null()).then(None).otherwise(df['Result'].cast(pl.UInt8, strict=False)).alias('Tricks'), # Result is actually ml Tricks.
         )
         # example of creating unneeded column. could drop here and leave it to mlBridgeAugmentLib to recreate with proper values.
         df = df.with_columns(
-            pl.Series('Result',df['Tricks'].cast(pl.Int8, strict=False)-6-df['BidLvl']), # overwrites Result column.
+            pl.when(pl.col('Contract').is_null()).then(None).otherwise(pl.col('Tricks').cast(pl.Int8)-6-df['BidLvl']).alias('Result'), # overwrites Result with ml Result.
+        )
+        assert ((df['BidLvl'].is_not_null() & df['BidSuit'].is_not_null() & df['Result'].is_not_null() & df['Tricks'].is_not_null()) | (df['BidLvl'].is_null() & df['BidSuit'].is_null() & df['Result'].is_null() & df['Tricks'].is_null())).all()
+        df = df.with_columns(
+            # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
+            # first NT->N and suit symbols to SHDCN
+            # If BidLvl is None, make Contract None
+            pl.when(pl.col('BidLvl').is_null())
+            .then(pl.lit('PASS'))
+            .otherwise(pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.col('Dbl')+pl.col('Declarer_Direction'))
+            .alias('Contract'),
         )
         # leave it to mlBridgeAugmentLib to convert contract parts to Score and Score_NS.
         # df = df.with_columns(
@@ -395,22 +411,40 @@ def convert_endplay_df_to_mlBridge_df(df):
             pl.Series('BidLvl',df['level'].cast(pl.UInt8),pl.UInt8), # todo: make level a uint8 in previous step.
         )
         df = df.with_columns(
-            pl.Series('BidSuit',df['denom'].replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String),pl.String),# categorical, yes
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.col('denom').replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String))
+            .alias('BidSuit')
         )
         df = df.with_columns(
-            pl.Series('trump',df['trump'].replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String),pl.String),# categorical?
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.col('trump').replace_strict(Strain_to_CDHSN_d,return_dtype=pl.String))
+            .alias('trump')
         )
         df = df.with_columns(
-            pl.Series('Dbl',df['penalty'].replace_strict(Dbl_to_X_d,return_dtype=pl.String),pl.String),# categorical, yes
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.col('penalty').replace_strict(Dbl_to_X_d,return_dtype=pl.String))
+            .alias('Dbl')
         )
         df = df.with_columns(
-            pl.Series('Declarer_Direction', [Direction_to_NESW_d[d] for d in df['declarer']], pl.String, strict=False), # todo: using list comprehension instead of type error when using replace_strict().
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.Series('Declarer_Direction', [Direction_to_NESW_d[d] for d in df['declarer']], pl.String, strict=False))
+            .alias('Declarer_Direction')
         )
         df = df.with_columns(
-            pl.Series('Result',df['result'].cast(pl.Int8, strict=False).fill_nan(0),pl.Int8),
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.Series('Result',df['result'].cast(pl.Int8, strict=False).fill_nan(0),pl.Int8))
+            .alias('Result')
         )
         df = df.with_columns(
-            pl.Series('Tricks',df['level'].cast(pl.Int8, strict=False).fill_nan(0)+df['result'].cast(pl.Int8, strict=False).fill_nan(0)+6,pl.UInt8),
+            pl.when(pl.col('BidLvl').is_null())
+            .then(None)
+            .otherwise(pl.Series('Tricks',df['level'].cast(pl.Int8, strict=False).fill_nan(0)+df['result'].cast(pl.Int8, strict=False).fill_nan(0)+6,pl.UInt8))
+            .alias('Tricks')
         )
         df = df.with_columns(
             pl.Series('Score',df['score'].cast(pl.Int16, strict=False).fill_nan(0),pl.Int16),
@@ -445,15 +479,17 @@ def convert_endplay_df_to_mlBridge_df(df):
         df = df.with_columns(
             pl.Series('Player_ID_W',df['Pair_Number_EW']+'_W',pl.String), # todo: fake player id
         )
-    df = df.with_columns(
-        # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
-        # first NT->N and suit symbols to SHDCN
-        # If BidLvl is None, make Contract None
-        pl.when(pl.col('BidLvl').is_null())
-        .then(None)
-        .otherwise(pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.col('Dbl')+pl.col('Declarer_Direction'))
-        .alias('Contract'),
-    )
+        # if this asserts, need to fix above assignments.
+        assert ((df['BidLvl'].is_not_null() & df['BidSuit'].is_not_null() & df['Result'].is_not_null() & df['Tricks'].is_not_null()) | (df['BidLvl'].is_null() & df['BidSuit'].is_null() & df['Result'].is_null() & df['Tricks'].is_null())).all()
+        df = df.with_columns(
+            # easier to use discrete replaces instead of having to slice contract (nt, pass would be a complication)
+            # first NT->N and suit symbols to SHDCN
+            # If BidLvl is None, make Contract None
+            pl.when(pl.col('BidLvl').is_null())
+            .then(pl.lit('PASS'))
+            .otherwise(pl.col('BidLvl').cast(pl.String)+pl.col('BidSuit')+pl.col('Dbl')+pl.col('Declarer_Direction'))
+            .alias('Contract'),
+        )
     df = df.with_columns(
         df['claimed'].cast(pl.Boolean, strict=False),
     )

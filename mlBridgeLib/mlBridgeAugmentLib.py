@@ -12,10 +12,7 @@
 
 import polars as pl
 from collections import defaultdict
-import sys
-import pathlib
-from typing import Optional, Union, Callable, Type, Dict, List, Tuple, Any # Added line
-import mlBridgeLib.mlBridgeLib as mlBridgeLib
+from typing import Optional, Union, Callable, Type, Dict, List, Tuple, Any
 import time
 
 import endplay # for __version__
@@ -24,6 +21,7 @@ from endplay.types import Deal, Contract, Denom, Player, Penalty, Vul
 from endplay.dds import calc_dd_table, calc_all_tables, par
 from endplay.dealer import generate_deals
 
+import mlBridgeLib.mlBridgeLib as mlBridgeLib
 from mlBridgeLib.mlBridgeLib import (
     NESW, SHDC, NS_EW,
     PlayerDirectionToPairDirection,
@@ -31,6 +29,49 @@ from mlBridgeLib.mlBridgeLib import (
     PairDirectionToOpponentPairDirection,
     score
 )
+
+
+# todo: use versions in mlBridgeLib
+VulToEndplayVul_d = { # convert mlBridgeLib Vul to endplay Vul
+    'None':Vul.none,
+    'Both':Vul.both,
+    'N_S':Vul.ns,
+    'E_W':Vul.ew
+}
+
+
+DealerToEndPlayDealer_d = { # convert mlBridgeLib dealer to endplay dealer
+    'N':Player.north,
+    'E':Player.east,
+    'S':Player.south,
+    'W':Player.west
+}
+
+declarer_to_LHO_d = {
+    None:None,
+    'N':'E',
+    'E':'S',
+    'S':'W',
+    'W':'N'
+}
+
+
+declarer_to_dummy_d = {
+    None:None,
+    'N':'S',
+    'E':'W',
+    'S':'N',
+    'W':'E'
+}
+
+
+declarer_to_RHO_d = {
+    None:None,
+    'N':'W',
+    'E':'N',
+    'S':'E',
+    'W':'S'
+}
 
 
 def create_hand_nesw_columns(df: pl.DataFrame) -> pl.DataFrame:    
@@ -101,20 +142,37 @@ def Augment_Metric_By_Suits(metrics: pl.DataFrame, metric: str, dtype: pl.DataTy
 
 def update_hrs_cache_df(hrs_cache_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.DataFrame:
     # Print initial row counts
-    print(f"hrs_cache_df rows: {hrs_cache_df.height}")
-    print(f"new_df rows: {new_df.height}")
+    print(f"Initial hrs_cache_df rows: {hrs_cache_df.height}")
+    print(f"New data rows: {new_df.height}")
     
-    # Calculate which rows will be added vs replaced
+    # Early return if no new data to process
+    if new_df.is_empty():
+        print("No new data to process, returning original cache")
+        return hrs_cache_df
+    
+    # Calculate which PBNs will be updated vs added
     existing_pbns = set(hrs_cache_df['PBN'].to_list())
     new_pbns = set(new_df['PBN'].to_list())
     
-    pbns_to_replace = existing_pbns & new_pbns  # intersection
+    pbns_to_update = existing_pbns & new_pbns  # intersection
     pbns_to_add = new_pbns - existing_pbns      # difference
     
-    print(f"Rows to be replaced: {len(pbns_to_replace)}")
-    print(f"Rows to be added: {len(pbns_to_add)}")
-    print(f"Expected final row count: {hrs_cache_df.height + len(pbns_to_add)}")
+    print(f"PBNs to update (existing): {len(pbns_to_update)}")
+    print(f"PBNs to add (new): {len(pbns_to_add)}")
     
+    # Check for duplicate PBNs in new_df with different Dealer/Vul combinations
+    new_df_pbn_counts = new_df['PBN'].value_counts()
+    duplicate_pbns_in_new = new_df_pbn_counts.filter(pl.col('count') > 1)
+    if duplicate_pbns_in_new.height > 0:
+        print(f"Note: {duplicate_pbns_in_new.height} PBNs in new data have multiple Dealer/Vul combinations")
+        print(f"      This will result in more rows than unique PBNs")
+    
+    # Calculate expected final row count more accurately
+    # The update operation replaces existing rows with matching PBNs
+    # Then we add all rows from new_df that don't exist in hrs_cache_df
+    expected_final_rows = hrs_cache_df.height - len(pbns_to_update) + new_df.height
+    print(f"Expected final rows: {expected_final_rows} (existing: {hrs_cache_df.height} - updated: {len(pbns_to_update)} + new: {new_df.height})")
+
     # check for differing dtypes
     common_cols = set(hrs_cache_df.columns) & set(new_df.columns)
     dtype_diffs = {
@@ -138,7 +196,7 @@ def update_hrs_cache_df(hrs_cache_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.
         print(f"Added {len(missing_columns)} missing columns to {new_rows.height} new rows")
     
     print(f"Final hrs_cache_df rows: {hrs_cache_df.height}")
-    print(f"Net rows added: {len(pbns_to_add)}")
+    print(f"Operation completed successfully")
     
     return hrs_cache_df
 
@@ -216,10 +274,9 @@ def calc_double_dummy_deals(deals: List[Deal], batch_size: int = 40, output_prog
 
 
 # takes 10000/hour
-# easier to combine calculations of double dummy and par scores into one function. Otherwise, we would need to calculate par scores from columns.
-def calculate_ddtricks_par_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, max_adds: Optional[int] = None, output_progress: bool = True, progress: Optional[Any] = None) -> pl.DataFrame:
+def calculate_dd_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, max_adds: Optional[int] = None, output_progress: bool = True, progress: Optional[Any] = None) -> Tuple[pl.DataFrame, Dict[str, Any]]:
 
-    # Calculate double dummy and par
+    # Calculate double dummy scores only
     print(f"{hrs_df.height=}")
     print(f"{hrs_cache_df.height=}")
     assert hrs_df['PBN'].null_count() == 0, "PBNs in df must be non-null"
@@ -228,7 +285,7 @@ def calculate_ddtricks_par_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFra
     assert hrs_cache_df.filter(pl.col('PBN').str.len_chars().ne(69)).height == 0, hrs_cache_df.filter(pl.col('PBN').str.len_chars().ne(69))
     unique_hrs_df_pbns = set(hrs_df['PBN']) # could be non-unique PBN with difference Dealer, Vul.
     print(f"{len(unique_hrs_df_pbns)=}")
-    hrs_cache_with_nulls_df = hrs_cache_df.filter(pl.col('DD_N_C').is_null() | pl.col('ParScore').is_null())
+    hrs_cache_with_nulls_df = hrs_cache_df.filter(pl.col('DD_N_C').is_null())
     print(f"{len(hrs_cache_with_nulls_df)=}")
     hrs_cache_with_nulls_pbns = hrs_cache_with_nulls_df['PBN']
     print(f"{len(hrs_cache_with_nulls_pbns)=}")
@@ -254,40 +311,141 @@ def calculate_ddtricks_par_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFra
     unique_dd_tables_d = {deal.to_pbn():rt for deal,rt in zip(cleaned_pbns,unique_dd_tables)}
     print(f"{len(unique_dd_tables_d)=}")
 
-    # todo: use versions in mlBridgeLib
-    VulToEndplayVul_d = { # convert mlBridgeLib Vul to endplay Vul
-        'None':Vul.none,
-        'Both':Vul.both,
-        'N_S':Vul.ns,
-        'E_W':Vul.ew
-    }
-    DealerToEndPlayDealer_d = { # convert mlBridgeLib dealer to endplay dealer
-        'N':Player.north,
-        'E':Player.east,
-        'S':Player.south,
-        'W':Player.west
-    }
-
-    # Create dataframe of par scores using double dummy
+    # Create dataframe of double dummy scores only
     d = defaultdict(list)
     dd_columns = {f'DD_{direction}_{suit}':pl.UInt8 for suit in 'SHDCN' for direction in 'NESW'}
 
-    # Get Dealer/Vul from appropriate source (either hrs_df or hrs_cache_df) for each PBN type
-    source_rows = []
-    if pbns_to_add:
-        source_rows.extend(hrs_df.filter(pl.col('PBN').is_in(list(pbns_to_add)))[['PBN','Dealer','Vul']].unique().rows())
-    if pbns_to_replace:
-        source_rows.extend(hrs_cache_df.filter(pl.col('PBN').is_in(list(pbns_to_replace)))[['PBN','Dealer','Vul']].unique().rows())
-    print(f"pbns_to_add: {len(pbns_to_add)=}")
-    print(f"pbns_to_replace: {len(pbns_to_replace)=}")
-    print(f"source_rows: {len(source_rows)=}")
-    for pbn, dealer, vul in source_rows:
+    # Process each PBN that needs DD calculation
+    for pbn in pbns_to_process:
         if pbn not in unique_dd_tables_d:
             continue
         dd_rows = sum(unique_dd_tables_d[pbn].to_list(), []) # flatten dd_table
         d['PBN'].append(pbn)
         for col,dd in zip(dd_columns, dd_rows):
             d[col].append(dd)
+
+    # Create a DataFrame using only the keys in dictionary d while maintaining the schema from hrs_cache_df
+    filtered_schema = {k: hrs_cache_df[k].dtype for k, v in hrs_cache_df.schema.items() if k in d}
+    print(f"filtered_schema: {filtered_schema}")
+    error_filtered_schema = {k: None for k, v in d.items() if k not in hrs_cache_df.columns}
+    print(f"error_filtered_schema: {error_filtered_schema}")
+    assert len(error_filtered_schema) == 0, f"error_filtered_schema: {error_filtered_schema}"
+    dd_df = pl.DataFrame(d, schema=filtered_schema)
+    return dd_df, unique_dd_tables_d
+
+
+def calculate_par_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, unique_dd_tables_d: Dict[str, Any]) -> pl.DataFrame:
+
+    # Calculate par scores using existing double dummy tables
+    print(f"{hrs_df.height=}")
+    print(f"{hrs_cache_df.height=}")
+    print(f"Calculating par scores for {len(unique_dd_tables_d)} deals")
+    
+    # Assert that there are no None values in 'PBN' in hrs_cache_df
+    assert hrs_cache_df['PBN'].null_count() == 0, f"Found {hrs_cache_df['PBN'].null_count()} None values in 'PBN' column of hrs_cache_df"
+    
+    # untested but interesting
+    # # If no new DD tables were calculated, build DD tables from existing cache data
+    # if len(unique_dd_tables_d) == 0:
+    #     print("No new DD tables provided, building from existing cache data")
+    #     # Get PBNs that have DD data but missing ParScore
+    #     pbns_with_dd = hrs_cache_df.filter(
+    #         pl.col('DD_N_C').is_not_null() & 
+    #         pl.col('ParScore').is_null()
+    #     )['PBN'].unique().to_list()
+        
+    #     if len(pbns_with_dd) > 0:
+    #         print(f"Found {len(pbns_with_dd)} PBNs with DD data but missing ParScore")
+    #         # Build DD tables from existing cache data
+    #         from endplay import Deal
+    #         unique_dd_tables_d = {}
+    #         for pbn in pbns_with_dd:
+    #             # Get DD values from cache for this PBN
+    #             dd_df = hrs_cache_df.filter(pl.col('PBN') == pbn).select([
+    #                 'DD_N_S', 'DD_N_H', 'DD_N_D', 'DD_N_C', 'DD_N_N',
+    #                 'DD_E_S', 'DD_E_H', 'DD_E_D', 'DD_E_C', 'DD_E_N',
+    #                 'DD_S_S', 'DD_S_H', 'DD_S_D', 'DD_S_C', 'DD_S_N',
+    #                 'DD_W_S', 'DD_W_H', 'DD_W_D', 'DD_W_C', 'DD_W_N'
+    #             ])
+                
+    #             if dd_df.height > 0:
+    #                 dd_row = dd_df.row(0)
+                    
+    #                 # Convert to DD table format (4x5 matrix: NESW x SHDCN)
+    #                 dd_table = []
+    #                 for direction in ['N', 'E', 'S', 'W']:
+    #                     row = []
+    #                     for suit in ['S', 'H', 'D', 'C', 'N']:
+    #                         col_name = f'DD_{direction}_{suit}'
+    #                         # Find the index of this column in the selected columns
+    #                         col_idx = dd_df.columns.index(col_name)
+    #                         row.append(dd_row[col_idx])
+    #                     dd_table.append(row)
+                    
+    #                 unique_dd_tables_d[pbn] = dd_table
+    #         print(f"Built DD tables for {len(unique_dd_tables_d)} PBNs from cache")
+    #     else:
+    #         print("No PBNs found with DD data but missing ParScore")
+    
+    # Find PBNs that need par score calculation (only those that have DD calculations)
+    unique_hrs_df_pbns = set(hrs_df['PBN'])
+    print(f"{len(unique_hrs_df_pbns)=}")
+    hrs_cache_with_nulls_df = hrs_cache_df.filter(pl.col('ParScore').is_null())
+    print(f"{len(hrs_cache_with_nulls_df)=}")
+    hrs_cache_with_nulls_pbns = set(hrs_cache_with_nulls_df['PBN'])
+    print(f"{len(hrs_cache_with_nulls_pbns)=}")
+    
+    hrs_cache_all_pbns = set(hrs_cache_df['PBN'])
+    pbns_to_add = set(unique_hrs_df_pbns) - hrs_cache_all_pbns
+    print(f"{len(pbns_to_add)=}")
+    pbns_to_replace = set(unique_hrs_df_pbns).intersection(hrs_cache_with_nulls_pbns)
+    print(f"{len(pbns_to_replace)=}")
+    pbns_to_process = pbns_to_add.union(pbns_to_replace)
+    print(f"{len(pbns_to_process)=}")
+    
+    # Check which PBNs missing ParScore have DD tables available
+    pbns_missing_par = set(hrs_cache_with_nulls_pbns)  # Use the already calculated set
+    pbns_with_dd_tables = set(unique_dd_tables_d.keys())
+    pbns_missing_par_and_dd = pbns_missing_par - pbns_with_dd_tables
+    pbns_missing_par_with_dd = pbns_missing_par & pbns_with_dd_tables
+    
+    print(f"PBNs missing ParScore: {len(pbns_missing_par)}")
+    print(f"PBNs with DD tables available: {len(pbns_with_dd_tables)}")
+    print(f"PBNs missing ParScore with DD tables: {len(pbns_missing_par_with_dd)}")
+    print(f"PBNs missing ParScore without DD tables: {len(pbns_missing_par_and_dd)}")
+    
+    # Only process PBNs that have DD tables available
+    pbns_to_process = pbns_to_process & pbns_with_dd_tables
+    print(f"PBNs to process (with DD tables): {len(pbns_to_process)}")
+    
+    # Get Dealer/Vul from appropriate source for each PBN type
+    source_rows = []
+    if pbns_to_add:
+        source_rows.extend(hrs_df.filter(pl.col('PBN').is_in(list(pbns_to_add)))[['PBN','Dealer','Vul']].unique().rows())
+    if pbns_to_replace:
+        # Get rows from hrs_cache_df, but for None values in Dealer/Vul, get them from hrs_df
+        cache_rows = hrs_cache_df.filter(pl.col('PBN').is_in(list(pbns_to_replace)))[['PBN','Dealer','Vul']].unique()
+        
+        # Find rows with None values in Dealer or Vul
+        rows_with_none = cache_rows.filter(pl.col('Dealer').is_null() | pl.col('Vul').is_null())
+        rows_without_none = cache_rows.filter(pl.col('Dealer').is_not_null() & pl.col('Vul').is_not_null())
+        
+        # Get Dealer/Vul values from hrs_df for rows with None values
+        if rows_with_none.height > 0:
+            print(f"Found {rows_with_none.height} rows with None Dealer/Vul values, getting from hrs_df")
+            pbn_list = rows_with_none['PBN'].to_list()
+            hrs_df_rows = hrs_df.filter(pl.col('PBN').is_in(pbn_list))[['PBN','Dealer','Vul']].unique()
+            source_rows.extend(hrs_df_rows.rows())
+        
+        # Add rows that already have valid Dealer/Vul values
+        source_rows.extend(rows_without_none.rows())
+    
+    # Create dataframe of par scores
+    d = defaultdict(list)
+    for pbn, dealer, vul in source_rows:
+        if pbn not in unique_dd_tables_d:
+            continue
+        d['PBN'].append(pbn)
         d['Dealer'].append(dealer)
         d['Vul'].append(vul)
         parlist = par(unique_dd_tables_d[pbn], VulToEndplayVul_d[vul], DealerToEndPlayDealer_d[dealer])
@@ -308,8 +466,9 @@ def calculate_ddtricks_par_scores(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFra
     error_filtered_schema = {k: None for k, v in d.items() if k not in hrs_cache_df.columns}
     print(f"error_filtered_schema: {error_filtered_schema}")
     assert len(error_filtered_schema) == 0, f"error_filtered_schema: {error_filtered_schema}"
-    dd_par_df = pl.DataFrame(d, schema=filtered_schema)
-    return dd_par_df
+    par_df = pl.DataFrame(d, schema=filtered_schema)
+    print(f"par_df height: {par_df.height}")
+    return par_df
 
 
 def constraints(deal: Deal) -> bool:
@@ -382,14 +541,29 @@ def calculate_sd_probs(df: pl.DataFrame, hrs_cache_df: pl.DataFrame, sd_producti
     # calculate single dummy probabilities. if already calculated use cache value else update e with new result.
     sd_d = {}
     sd_dfs_d = {}
-    assert hrs_cache_df.height == hrs_cache_df['PBN'].n_unique(), "PBNs in hrs_cache_df must be unique"
-    pbns_to_add = set(df['PBN'])-set(hrs_cache_df['PBN'])
-    print(f"{len(pbns_to_add)=}")
-    pbns_to_replace = set(hrs_cache_df.filter(pl.col('PBN').is_in(df['PBN'].to_list()) & pl.col('Probs_Trials').is_null())['PBN'].to_list())
-    print(f"{len(pbns_to_replace)=}")
-    assert hrs_cache_df.filter(pl.col('PBN').is_in(pbns_to_replace) & pl.col('Probs_Trials').is_null()).height == len(pbns_to_replace), "PBN not a valid replacement"
-    pbns_to_process = pbns_to_add.union(pbns_to_replace)
-    print(f"{len(pbns_to_process)=}")
+    assert hrs_cache_df.height == hrs_cache_df.unique(subset=['PBN', 'Dealer', 'Vul']).height, "PBN+Dealer+Vul combinations in hrs_cache_df must be unique"
+    
+    # Calculate which PBNs to add vs replace
+    # Note: Single dummy calculations are the same for a given PBN regardless of Dealer/Vul
+    # So we work at the PBN level, but need to handle multiple Dealer/Vul combinations properly
+    
+    # Find PBNs to add (in df but not in hrs_cache_df)
+    df_pbns = set(df['PBN'].to_list())
+    hrs_cache_pbns = set(hrs_cache_df['PBN'].to_list())
+    pbns_to_add = df_pbns - hrs_cache_pbns
+    print(f"PBNs to add: {len(pbns_to_add)}")
+    
+    # Find PBNs to replace (in both, but with null Probs_Trials in hrs_cache_df)
+    # todo: this step takes 3m. find a faster way. perhaps using join?
+    pbns_to_replace = set(hrs_cache_df.filter(
+        pl.col('PBN').is_in(df['PBN'].to_list()) & 
+        pl.col('Probs_Trials').is_null()
+    )['PBN'].to_list())
+    print(f"PBNs to replace: {len(pbns_to_replace)}")
+    
+    # Combine all PBNs that need processing
+    pbns_to_process = list(pbns_to_add.union(pbns_to_replace))
+    print(f"Total unique PBNs to process: {len(pbns_to_process)}")
     if max_adds is not None:
         pbns_to_process = list(pbns_to_process)[:max_adds]
         print(f"limit: {max_adds=} {len(pbns_to_process)=}")
@@ -674,7 +848,7 @@ def convert_contract_to_DD_Score_Ref(df: pl.DataFrame) -> pl.DataFrame:
         pl.struct([f"DD_{direction}_{strain}", f"Vul_{pair_direction}"]) # todo: change Vul_{pair_direction} to use iVul so brs_df can be used without joining Vul_(NS|EW).
         .map_elements(
             lambda r, lvl=level, strn=strain, dir=direction, pdir=pair_direction: 
-                scores_d.get((lvl, strn, r[f"DD_{dir}_{strn}"], r[f"Vul_{pdir}"]), 0), # default becomes 0. ok? should only occur in the case of null (PASS).
+                scores_d.get((lvl, strn, r[f"DD_{dir}_{strn}"], r[f"Vul_{pdir}"]), None), # default of None should only occur in the case of director's adjustment.
             return_dtype=pl.Int16
         )
         .alias(f"DD_Score_{level}{strain}_{direction}")
@@ -1269,14 +1443,26 @@ class DD_SD_Augmenter:
 
     def _process_scores_and_tricks(self) -> pl.DataFrame:
         all_scores_d, scores_d, scores_df = self._time_operation("calculate_scores", calculate_scores)
-        dd_par_df = self._time_operation(
-            "calculate_ddtricks_par_scores", 
-            calculate_ddtricks_par_scores, 
+        
+        # Calculate double dummy scores first
+        dd_df, unique_dd_tables_d = self._time_operation(
+            "calculate_dd_scores", 
+            calculate_dd_scores, 
             self.df, self.hrs_cache_df, self.max_adds, self.output_progress, self.progress
         )
 
-        if not dd_par_df.is_empty():
-            self.hrs_cache_df = update_hrs_cache_df(self.hrs_cache_df, dd_par_df)
+        if not dd_df.is_empty():
+            self.hrs_cache_df = update_hrs_cache_df(self.hrs_cache_df, dd_df)
+        
+        # Calculate par scores using the double dummy results
+        par_df = self._time_operation(
+            "calculate_par_scores",
+            calculate_par_scores,
+            self.df, self.hrs_cache_df, unique_dd_tables_d
+        )
+
+        if not par_df.is_empty():
+            self.hrs_cache_df = update_hrs_cache_df(self.hrs_cache_df, par_df)
 
         sd_dfs_d, sd_df = self._time_operation(
             "calculate_sd_probs",
@@ -1404,9 +1590,7 @@ class AllContractsAugmenter:
 class FinalContractAugmenter:
     def __init__(self, df: pl.DataFrame):
         self.df = df
-        self.declarer_to_LHO_d = {None:None,'N':'E','E':'S','S':'W','W':'N'}
-        self.declarer_to_dummy_d = {None:None,'N':'S','E':'W','S':'N','W':'E'}
-        self.declarer_to_RHO_d = {None:None,'N':'W','E':'N','S':'E','W':'S'}
+        # note that polars exprs are allowed in dict values.
         self.vul_conditions = {
             'NS': pl.col('Vul').is_in(['N_S', 'Both']),
             'EW': pl.col('Vul').is_in(['E_W', 'Both'])
@@ -1449,9 +1633,9 @@ class FinalContractAugmenter:
         self.df = self._time_operation(
             "convert_declarer_to_directions",
             lambda df: df.with_columns([
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_LHO_d).alias('LHO_Direction'),
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_dummy_d).alias('Dummy_Direction'),
-                pl.col('Declarer_Direction').replace_strict(self.declarer_to_RHO_d).alias('RHO_Direction'),
+                pl.col('Declarer_Direction').replace_strict(declarer_to_LHO_d).alias('LHO_Direction'),
+                pl.col('Declarer_Direction').replace_strict(declarer_to_dummy_d).alias('Dummy_Direction'),
+                pl.col('Declarer_Direction').replace_strict(declarer_to_RHO_d).alias('RHO_Direction'),
             ]),
                 self.df
             )
@@ -1655,7 +1839,7 @@ class FinalContractAugmenter:
                     "convert_contract_to_score",
                     lambda df: df.with_columns([
                         pl.struct(['BidLvl', 'BidSuit', 'Tricks', 'Vul_Declarer', 'Dbl'])
-                            .map_elements(lambda x: all_scores_d.get(tuple(x.values()),0), # default becomes 0. ok? should only occur in the case of null (PASS).
+                            .map_elements(lambda x: all_scores_d.get(tuple(x.values()),None), # default of None should only occur in the case of director's adjustment.
                                         return_dtype=pl.Int16)
                             .alias('Score'),
                     ]),
@@ -1823,12 +2007,12 @@ class FinalContractAugmenter:
                     .map_elements(lambda x: None if x['EV_Score_Col_Declarer'] is None else x[x['EV_Score_Col_Declarer']],
                                 return_dtype=pl.Float32).alias('EV_Score_Declarer'),
                 pl.struct(['BidLvl', 'BidSuit', 'Tricks', 'Vul_Declarer', 'Dbl'])
-                    .map_elements(lambda x: all_scores_d.get(tuple(x.values()),0), # default becomes 0. ok? should only occur in the case of null (PASS).
+                    .map_elements(lambda x: all_scores_d.get(tuple(x.values()),None), # default becomes 0. ok? should only occur in the case of null (PASS).
                                 return_dtype=pl.Int16)
                     .alias('Computed_Score_Declarer'),
 
                 pl.struct(['Contract', 'Result', 'Score_NS', 'BidLvl', 'BidSuit', 'Dbl','Declarer_Direction', 'Vul_Declarer']).map_elements(
-                    lambda r: None if r['Contract'] is None else 0 if r['Contract'] == 'PASS' else r['Score_NS'] if r['Result'] is None else score(
+                    lambda r: 0 if r['Contract'] == 'PASS' else None if r['Contract'] is None or r['Result'] is None else score(
                         r['BidLvl'] - 1, 'CDHSN'.index(r['BidSuit']), len(r['Dbl']), 'NESW'.index(r['Declarer_Direction']),
                         r['Vul_Declarer'], r['Result'], True),return_dtype=pl.Int16).alias('Computed_Score_Declarer2'),
             ]),
@@ -2025,7 +2209,7 @@ class MatchPointAugmenter:
                 self.df = self.df.with_columns(
                     pl.struct([col_pair, 'Board']).map_elements(
                         lambda row: sum(
-                            1.0 if row[col_pair] > score else 0.5 if row[col_pair] == score else 0.0
+                            1.0 if row[col_pair] > (0 if score is None else score) else 0.5 if row[col_pair] == (0 if score is None else score) else 0.0
                             for score in board_to_scores_d[row['Board']]
                         ),
                         return_dtype=pl.Float64
@@ -2034,7 +2218,7 @@ class MatchPointAugmenter:
                 self.df = self.df.with_columns([
                     (pl.col(f'MP_{col_pair}')/(pl.col('MP_Top')+1)).alias(f'{col}_Pct_{pair}')
                 ])
-                assert self.df[f'{col}_Pct_{pair}'].is_between(0,1).all()
+                assert self.df[f'{col}_Pct_{pair}'].is_between(0,1).all(), self.df.filter(~pl.col(f'{col}_Pct_{pair}').is_between(0,1))
         # calculate Par percentages.
         for col in ['Par']:
             for pair in ['NS','EW']:
@@ -2051,7 +2235,7 @@ class MatchPointAugmenter:
                 self.df = self.df.with_columns([
                     (pl.col(f'MP_{col_pair}')/(pl.col('MP_Top')+1)).alias(f'{col}_Pct_{pair}')
                 ])
-                assert self.df[f'{col}_Pct_{pair}'].is_between(0,1).all()
+                assert self.df[f'{col}_Pct_{pair}'].is_between(0,1).all(), self.df.filter(~pl.col(f'{col}_Pct_{pair}').is_between(0,1))
 
         # for declarer orientation scores
         self.df = self.df.with_columns(
