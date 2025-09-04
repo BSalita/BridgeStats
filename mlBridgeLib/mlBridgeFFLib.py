@@ -18,6 +18,7 @@ FrenchDirectionToDirection_d = { # convert mlBridgeLib dealer to endplay dealer
     'S':'S',
     'W':'W',
     'O':'W',
+    '-':None, # happened when computer failed to communicate with bridgemates.
     None:None,  # Map 'Unknown' to None/NULL
 }
 FrenchStrainToStrain_d = { # convert mlBridgeLib dealer to endplay dealer
@@ -158,12 +159,16 @@ def convert_ffdf_api_to_mldf(ffldfs):
     ])
     cols = [
         'PBN', 'Player_Direction', 'MP_Top',
-        'tournament_team_section_name', 'tournament_team_section_table_number',
+        'tournament_date', 'tournament_team_section_name', 'tournament_team_section_table_number',
         'deal_dealNumber', 'deal_dealer', 'deal_vulnerability',
         'teams_players_position', 'teams_opponents_position',
         'teams_players_name_id', 'teams_opponents_name_oppo_id'
     ]
     sd_df = sd_df[cols].unique() # sd_df was exploded so must now deduplicate
+
+    sd_df = sd_df.with_columns([
+        pl.col('tournament_date').alias('Date'),
+    ])
  
     sd_df = sd_df.with_columns([
         pl.col('tournament_team_section_name').alias('Section_Name'),
@@ -198,7 +203,14 @@ def convert_ffdf_api_to_mldf(ffldfs):
     ])
 
    # reduce height to 1/4 of original (only the boards played by home pair) by removing non-unique columns.
-    sd_df = sd_df['Section_Name','Board','PBN','Dealer','Vul','Pair_Direction','Pair_Number','MP_Top'].unique().sort('Board')
+    sd_df = sd_df['Date','Section_Name','Board','PBN','Dealer','Vul','Pair_Direction','Pair_Number','MP_Top'].unique().sort('Board')
+
+    if sd_df['Pair_Direction'].eq('NS').all():
+        pair_direction = 'NS'
+    elif sd_df['Pair_Direction'].eq('EW').all():
+        pair_direction = 'EW'
+    else:
+        raise ValueError(f"Invalid Pair_Direction: {df['Pair_Direction'].unique()}")
 
     # df = ffldfs['simultaneous_roadsheets']
 
@@ -227,18 +239,34 @@ def convert_ffdf_api_to_mldf(ffldfs):
     simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
         pl.col('result').alias('roadsheets_deals_result'),
     ]).drop('result')
-    simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
-        pl.col('score_ns').alias('roadsheets_deals_opponentsScore'),
-    ]).drop('score_ns')
-    simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
-        pl.col('score_eo').alias('roadsheets_deals_teamScore'),
-    ]).drop('score_eo')
-    simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
-        pl.col('note_ns').alias('roadsheets_deals_opponentsAvgNote'),
-    ]).drop('note_ns')
-    simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
-        pl.col('note_eo').alias('roadsheets_deals_teamAvgNote'),
-    ]).drop('note_eo')
+    if pair_direction == 'NS':
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('score_ns').alias('roadsheets_deals_teamScore'),
+        ]).drop('score_ns')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('score_eo').alias('roadsheets_deals_opponentsScore'),
+        ]).drop('score_eo')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('note_ns').alias('roadsheets_deals_teamAvgNote'),
+        ]).drop('note_ns')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('note_eo').alias('roadsheets_deals_opponentsAvgNote'),
+        ]).drop('note_eo')
+    elif pair_direction == 'EW':
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('score_ns').alias('roadsheets_deals_opponentsScore'),
+        ]).drop('score_ns')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('score_eo').alias('roadsheets_deals_teamScore'),
+        ]).drop('score_eo')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('note_ns').alias('roadsheets_deals_opponentsAvgNote'),
+        ]).drop('note_ns')
+        simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
+            pl.col('note_eo').alias('roadsheets_deals_teamAvgNote'),
+        ]).drop('note_eo')
+    else:
+        raise ValueError(f"Invalid Pair_Direction: {df['Pair_Direction'].unique()}")
     simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
         pl.col('team_ns_id').alias('Pair_Number_NS'),
     ]).drop('team_ns_id')
@@ -314,6 +342,8 @@ def convert_ffdf_api_to_mldf(ffldfs):
     df = df.with_columns([
         pl.when(pl.col('roadsheets_deals_result').str.starts_with('+'))
             .then(pl.col('roadsheets_deals_result').str.slice(1))  # Remove '+'
+            .when(pl.col('roadsheets_deals_result').eq('-')) # happened when computer failed to communicate with bridgemates.
+            .then(None)
             .when(pl.col('roadsheets_deals_result').str.starts_with('-'))
             .then(pl.col('roadsheets_deals_result'))
             .otherwise(pl.lit('0'))  # Replace '=' with '0'
@@ -323,13 +353,15 @@ def convert_ffdf_api_to_mldf(ffldfs):
 
     # todo: need 'if' test for different values (team home/opponents) to create NS/EW/EO aliases. otherwise the same code.
     # todo: debug not all pairs are NS or EW.
-    if df['Pair_Direction'].eq('NS').all():
+    if pair_direction == 'NS':
         df = df.with_columns([
             pl.when(pl.col('roadsheets_deals_teamScore').str.contains(r'^\d+$'))
                 .then(pl.col('roadsheets_deals_teamScore'))
                 .when(pl.col('roadsheets_deals_teamScore').str.to_uppercase().str.starts_with('PASS')) # e.g. 'PASS' or 'passe' or 'PASSE'
                 .then(pl.lit('0'))
-                .otherwise('-'+pl.col('roadsheets_deals_opponentsScore'))
+                .when(pl.col('roadsheets_deals_opponentsScore').str.contains(r'^\d+$'))
+                .then('-'+pl.col('roadsheets_deals_opponentsScore'))
+                .otherwise(pl.lit(None))
                 .cast(pl.Int16)
                 .alias('Score_NS'),
         ])
@@ -338,17 +370,21 @@ def convert_ffdf_api_to_mldf(ffldfs):
                 .then(pl.col('roadsheets_deals_opponentsScore'))
                 .when(pl.col('roadsheets_deals_opponentsScore').str.to_uppercase().str.starts_with('PASS')) # e.g. 'PASS' or 'passe' or 'PASSE'
                 .then(pl.lit('0'))
-                .otherwise('-'+pl.col('roadsheets_deals_teamScore'))
+                .when(pl.col('roadsheets_deals_teamScore').str.contains(r'^\d+$'))
+                .then('-'+pl.col('roadsheets_deals_teamScore'))
+                .otherwise(pl.lit(None))
                 .cast(pl.Int16)
                 .alias('Score_EW'),
         ])
-    elif df['Pair_Direction'].eq('EW').all():
+    elif pair_direction == 'EW':
         df = df.with_columns([
             pl.when(pl.col('roadsheets_deals_teamScore').str.contains(r'^\d+$'))
                 .then(pl.col('roadsheets_deals_teamScore'))
                 .when(pl.col('roadsheets_deals_teamScore').str.to_uppercase().str.starts_with('PASS')) # e.g. 'PASS' or 'passe' or 'PASSE'
                 .then(pl.lit('0'))
-                .otherwise('-'+pl.col('roadsheets_deals_opponentsScore'))
+                .when(pl.col('roadsheets_deals_opponentsScore').str.contains(r'^\d+$'))
+                .then('-'+pl.col('roadsheets_deals_opponentsScore'))
+                .otherwise(pl.lit(None))
                 .cast(pl.Int16)
                 .alias('Score_EW'),
         ])
@@ -357,7 +393,9 @@ def convert_ffdf_api_to_mldf(ffldfs):
                 .then(pl.col('roadsheets_deals_opponentsScore'))
                 .when(pl.col('roadsheets_deals_opponentsScore').str.to_uppercase().str.starts_with('PASS')) # e.g. 'PASS' or 'passe' or 'PASSE'
                 .then(pl.lit('0'))
-                .otherwise('-'+pl.col('roadsheets_deals_teamScore'))
+                .when(pl.col('roadsheets_deals_teamScore').str.contains(r'^\d+$'))
+                .then('-'+pl.col('roadsheets_deals_teamScore'))
+                .otherwise(pl.lit(None))
                 .cast(pl.Int16)
                 .alias('Score_NS'),
         ])

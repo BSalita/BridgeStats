@@ -11,15 +11,14 @@
 
 
 import logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO) # or DEBUG
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from mlBridgeLib.logging_config import setup_logger
+logger = setup_logger(__name__)
 def print_to_log_info(*args):
     print_to_log(logging.INFO, *args)
 def print_to_log_debug(*args):
     print_to_log(logging.DEBUG, *args)
 def print_to_log(level, *args):
-    logging.log(level, ' '.join(str(arg) for arg in args))
+    logger.log(level, ' '.join(str(arg) for arg in args))
 
 import numpy as np
 import pandas as pd
@@ -76,6 +75,41 @@ contract_classes_dtype = pd.CategoricalDtype(contract_classes, ordered=False)
 declarer_direction_to_pair_direction = {'N':'NS','S':'NS','E':'EW','W':'EW'}
 # creates a dict all possible opening bids in auction order. key is npasses and values are opening bids.
 auction_order = [level+suit for level in '1234567' for suit in 'CDHSN']+['x','xx','p'] # todo: put into mlBridgeLib
+# want to make these python enums but the '' in Dbl_enum isn't allowed. So back to pl.Enum we go.
+BidSuit_enum = pl.Enum(['C', 'D', 'H', 'S', 'N']) # but could be None if PASS
+ContractType_enum = pl.Enum(['Pass', 'Partial', 'Game', 'SSlam', 'GSlam'])
+Dbl_enum = pl.Enum(['', 'X', 'XX']) # but could be None if PASS
+Vul_enum = pl.Enum(['None', 'N_S', 'E_W', 'Both']) # todo: why not NS|EW?
+Dealer_enum = pl.Enum(['N', 'E', 'S', 'W'])
+Declarer_Direction_enum = pl.Enum(['N', 'E', 'S', 'W']) # but could be None if PASS
+Opponent_Pair_Direction_enum = pl.Enum(['NS', 'EW'])
+Declarer_Pair_Direction_enum = pl.Enum(['NS', 'EW'])
+Contract_enum = pl.Enum(['PASS']+[str(level)+strain+dbl+direction for level in range(1,8) for strain in 'CDHSN' for dbl in ['','X','XX'] for direction in 'NESW']) # but could be None if PASS
+SL_ML_SJ_enum = pl.Enum([
+    f"{a}-{b}-{c}-{d}"
+    for a in range(13, -1, -1)  # First suit: 13 down to 0
+    for b in range(min(a, 13-a), -1, -1)  # Second suit: ≤ first, ≤ remaining
+    for c in range(min(b, 13-a-b), -1, -1)  # Third suit: ≤ second, ≤ remaining
+    for d in [13-a-b-c]  # Fourth suit: whatever's left
+    if d >= 0 and d <= c  # Must be non-negative and ≤ third suit
+])
+
+# Define all possible categories for each categorical feature
+CATEGORICAL_SCHEMAS = {
+    'BidSuit': BidSuit_enum,
+    'ContractType': ContractType_enum,
+    'Dbl': Dbl_enum,
+    'Vul': Vul_enum,
+    'Dealer': Dealer_enum,
+    'Declarer_Direction': Declarer_Direction_enum,
+    'Opponent_Pair_Direction': Opponent_Pair_Direction_enum,
+    'Declarer_Pair_Direction': Declarer_Pair_Direction_enum,
+    'Contract': Contract_enum,
+    'SL_N_ML_SJ': SL_ML_SJ_enum,
+    'SL_S_ML_SJ': SL_ML_SJ_enum,
+    'SL_E_ML_SJ': SL_ML_SJ_enum, 
+    'SL_W_ML_SJ': SL_ML_SJ_enum,
+}
 
 # Common direction mappings
 Direction_to_NESW_d = {
@@ -83,6 +117,7 @@ Direction_to_NESW_d = {
     'E': 'E',
     'S': 'S',
     'W': 'W',
+    'w': 'W', # needed in hand_records_clean
     'North': 'N',
     'East': 'E',
     'South': 'S',
@@ -92,6 +127,7 @@ Direction_to_NESW_d = {
     'south': 'S',
     'west': 'W', # only 'west' is used in ACBL data, not 'north', 'east', or 'south'. not sure why.
     '': '', # passed-out so no declarer direction
+    None: None, # needed in hand_records_clean
 }
 
 # List of all possible contract strings
@@ -147,6 +183,7 @@ Vulnerability_to_Vul_d = {
     'ns': 'N_S',
     'ew': 'E_W',
     'both': 'Both',
+    '-': 'None', # needed in hand_records_clean. suppose to be 'None'?
 }
 
 EpiVul_to_Vul_NS_Bool_d = {
@@ -385,7 +422,9 @@ def pbn_to_hands(pbn):
 
 
 def validate_brs(brs):
-    assert '-' not in brs and 'T' not in brs, brs # must not have a '-' or 'T'
+    if '-' in brs or 'T' in brs:
+        print_to_log_info('validate_brs: must not have a "-" or "T":', brs)
+        return False
     sorted_brs = '22223333444455556666777788889999AAAACCCCDDDDHHHHJJJJKKKKQQQQSSSSTTTT' # sorted brs must match this string
     s = brs.replace('10','T')
     if ''.join(sorted(s)) != sorted_brs:
@@ -403,6 +442,7 @@ def LinToPBN(df):
     return ['N:'+' '.join(['.'.join(list(map(lambda x: x[::-1], re.split('S|H|D|C', hh)))[1:]) for hh in r]) for r in df.select(pl.col(r'^Hand_[NESW]$')).rows()]
     
 
+# todo: brs_to_pbn() is slow because of Deal(pbn).to_pbn() overhead. Need to re-implement brs_to_pbn() without Deal().
 def brs_to_pbn(brs,void='',ten='T'):
     r = r'S(.*)H(.*)D(.*)C(.*)'
     rs = r*4
@@ -1431,3 +1471,32 @@ def CreateSqlTablesFile(f,tables,primary_keys):
 
 # initializations
 scoresd, setScoresd, makeScoresd = ScoreDicts()
+
+
+def show_estimated_memory_usage(df):
+
+    estimated_size_df = df.estimated_size()
+
+    # Per-column bytes and MB
+    estimated_size_per_col = (
+        pl.DataFrame({
+            "column": df.columns,
+            "bytes": [df[c].estimated_size() for c in df.columns],
+        })
+        .with_columns((pl.col("bytes") / (1024**2)).round(2).alias("MB"))
+        .sort("bytes", descending=True)
+    )
+
+    estimated_size_per_dtype = (
+        pl.DataFrame({
+            "dtype": [str(df[c].dtype) for c in df.columns],
+            "bytes": [df[c].estimated_size() for c in df.columns],
+        })
+        .group_by("dtype")
+        .agg(pl.col("bytes").sum().alias("bytes"))
+        .with_columns((pl.col("bytes") / (1024**2)).round(2).alias("MB"))
+        .sort("bytes", descending=True)
+    )
+
+    return estimated_size_df, estimated_size_per_col, estimated_size_per_dtype
+

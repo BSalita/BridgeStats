@@ -31,6 +31,7 @@ from mlBridgeLib.mlBridgeLib import (
     ContractToScores,
     DirectionToVul,
     hands_to_brs,
+    hrs_to_brss,
     pbn_to_hands,
     score,
     ContractTypeFromContract,
@@ -43,7 +44,57 @@ from mlBridgeLib.mlBridgeLib import (
     CategorifyContractTypeBySuit,
     CategorifyContractTypeByDirection,
     MatchPointScoreUpdate,
+    show_estimated_memory_usage,
+    CATEGORICAL_SCHEMAS,
 )
+# Robust import of logging_config that handles different environments
+try:
+    from mlBridgeLib.logging_config import (
+        setup_logger,
+        get_logger,
+        log_print,
+        init_project_logging,
+    )
+except ImportError:
+    # Provide fallback functions if logging_config is not available
+    import logging
+    
+    def setup_logger(name=None, level=logging.INFO, log_file=None):
+        """Fallback setup_logger function."""
+        if name is None:
+            import inspect
+            frame = inspect.currentframe().f_back
+            name = frame.f_globals.get('__name__', 'ml_bridge')
+        
+        logger = logging.getLogger(name)
+        if not logger.handlers:
+            logging.basicConfig(
+                level=level,
+                format='%(asctime)s - %(name)s - %(funcName)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+        return logger
+    
+    def get_logger(name=None):
+        """Fallback get_logger function."""
+        if name is None:
+            import inspect
+            frame = inspect.currentframe().f_back
+            name = frame.f_globals.get('__name__', 'ml_bridge')
+        return logging.getLogger(name)
+    
+    def log_print(*args, level=logging.INFO, sep=' ', end=''):
+        """Fallback log_print function."""
+        import inspect
+        frame = inspect.currentframe().f_back
+        module_name = frame.f_globals.get('__name__', 'ml_bridge')
+        logger = get_logger(module_name)
+        message = sep.join(str(arg) for arg in args)
+        logger.log(level, message)
+    
+    def init_project_logging(log_file=None, level=logging.INFO):
+        """Fallback init_project_logging function."""
+        return setup_logger('ml_bridge', level=level, log_file=log_file)
 
 # List of all possible contract strings
 contract_classes = [f"{level}{strain}{dbl}" for level in range(1,8) for strain in ['C','D','H','S','N'] for dbl in ['','X','XX']] + ['Pass']

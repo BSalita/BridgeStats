@@ -21,9 +21,8 @@ class PostmortemBase(ABC):
     
     def initialize_logging(self):
         """Set up logging configuration."""
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
+        from mlBridgeLib.logging_config import setup_logger
+        self.logger = setup_logger(__name__)
     
     def print_to_log_info(self, *args):
         """Log information messages."""
@@ -35,7 +34,7 @@ class PostmortemBase(ABC):
     
     def print_to_log(self, level, *args):
         """Log messages at specified level."""
-        logging.log(level, ' '.join(str(arg) for arg in args))
+        self.logger.log(level, ' '.join(str(arg) for arg in args))
     
     # ---- UI Components ----
     
