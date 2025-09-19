@@ -11,7 +11,7 @@
 
 
 import logging
-from mlBridgeLib.logging_config import setup_logger
+from logging_config import setup_logger
 logger = setup_logger(__name__)
 def print_to_log_info(*args):
     print_to_log(logging.INFO, *args)

@@ -846,7 +846,7 @@ def update_hand_records_cache(hrs_cache_df: pl.DataFrame, new_df: pl.DataFrame) 
     # The update operation replaces existing rows with matching PBNs
     # Then we add all rows from new_df that don't exist in hrs_cache_df
     expected_final_rows = hrs_cache_df.height - len(pbns_to_update) + new_df.height
-    logger.info(f"Expected final rows: {expected_final_rows} (existing: {hrs_cache_df.height} - updated: {len(pbns_to_update)} + new: {new_df.height})")
+    logger.info(f"Expected final rows: {expected_final_rows} (existing: {hrs_cache_df.height} - updated: {len(pbns_to_update)} + new: {len(pbns_to_add)})")
 
     # check for differing dtypes
     common_cols = set(hrs_cache_df.columns) & set(new_df.columns)
@@ -924,38 +924,6 @@ def precompute_contract_score_tables() -> Tuple[Dict[Tuple, int], Dict[Tuple, in
     # Transpose and create DataFrame efficiently
     scores_df = pl.DataFrame(dict(zip(columns, data)), orient='row')
     return all_scores_d, scores_d, scores_df
-
-
-# Global cache for scores calculation
-_scores_cache = None
-
-def get_cached_scores() -> Tuple[Dict[Tuple, int], Dict[Tuple, int], pl.DataFrame]:
-    """Cached wrapper around `precompute_contract_score_tables()` to avoid recomputation.
-
-    Purpose:
-    - Provide cached access to bridge scoring lookup tables
-    - Avoid expensive recomputation of contract scores
-    - Return both detailed and simplified scoring dictionaries
-
-    Parameters:
-    - None (uses global cache)
-
-    Returns:
-    - Tuple containing:
-      - all_scores_d: Complete scoring dictionary with doubling variants
-      - scores_d: Simplified scoring dictionary (penalty doubled for failed contracts)
-      - scores_df: DataFrame with score arrays for all contract combinations
-
-    Input columns:
-    - None (generates scoring data)
-
-    Output columns:
-    - Returns pre-computed scoring reference data, not DataFrame columns
-    """
-    global _scores_cache
-    if _scores_cache is None:
-        _scores_cache = precompute_contract_score_tables()
-    return _scores_cache
 
 
 def expand_scores_by_vulnerability(scores_df: pl.DataFrame) -> pl.DataFrame:
@@ -6445,8 +6413,8 @@ class MatchPointAugmenter:
         t_start = time.time()
         logger.info("Starting matchpoint augmentations")
         
-        self._compute_matchpoint_top() # 5s
         self._compute_raw_matchpoints() # 12s
+        self._compute_matchpoint_top() # 5s
         self._convert_to_percentages() # 1s
         self._compute_declarer_percentage() # 1s
         self._compute_comprehensive_matchpoints() # 3m

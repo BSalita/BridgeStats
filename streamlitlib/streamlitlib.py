@@ -255,9 +255,6 @@ def ShowDataFrameTable(table_df,key=None,output_method='aggrid',color_column=Non
         if color_column is not None:
             gb.configure_column(color_column, cellStyle={'color': 'black', 'background-color': '#FEFBF7'}) # must be executed before build()
         gridOptions = gb.build()
-        # Ensure consistent row height and no pagination panel
-        gridOptions.setdefault('rowHeight', 28)
-        gridOptions.setdefault('suppressPaginationPanel', True)
         # ngroup_name is the name of a column which contains the same value for every member of a group. Used to alternate colors for a group as opposed to odd/even.
         if ngroup_name is None:
             custom_css['.ag-row:nth-child(odd)'] = {'background-color': 'white'}
@@ -282,9 +279,6 @@ def ShowDataFrameTable(table_df,key=None,output_method='aggrid',color_column=Non
             rows_to_show = min(4, len(table_df))
         else:
             rows_to_show = max(1, min(int(height_rows), len(table_df)))
-        # If the caller wants to show all rows, use autoHeight to expand fully
-        if rows_to_show >= len(table_df):
-            gridOptions['domLayout'] = 'autoHeight'
         AgGrid(
             table_df,
             gridOptions=gridOptions,
@@ -311,7 +305,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from io import BytesIO
 from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, Table, TableStyle, Flowable, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, Table, TableStyle, Flowable
 from reportlab.pdfgen import canvas
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -332,9 +326,6 @@ class HorizontalLine(Flowable):
 
 
 def markdown_to_paragraphs(md_string, styles):
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER
-    
     # Convert Markdown to HTML
     html_content = markdown.markdown(md_string)
     
@@ -348,37 +339,23 @@ def markdown_to_paragraphs(md_string, styles):
             # Extract header level and text
             level = int(line[2])
             text = line[4:-5]
-            # Create centered style for headings
-            base_style = styles[f"Heading{level}"]
-            centered_style = ParagraphStyle(
-                f"CenteredHeading{level}",
-                parent=base_style,
-                alignment=TA_CENTER
-            )
-            style = centered_style
+            style = styles[f"Heading{level}"]
         else:
             text = line[3:-4]  # Remove <p> and </p> tags
             style = styles["Normal"]
         
         if text:
             paragraphs.append(Paragraph(text, style))
-            # Don't add spacing after H2 headings (main title) to keep subheader close
-            if not (line.startswith("<h") and int(line[2]) == 2):
-                paragraphs.append(Spacer(1, 12))
+            paragraphs.append(Spacer(1, 12))
     
     return paragraphs
 
 
-def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = None, shrink_to_fit: bool = False):
+def dataframe_to_table(df):
     # Convert DataFrame to HTML
 
     if isinstance(df, pl.DataFrame):
         df = df.to_pandas() # doesn't handle native polars
-    # Apply optional slicing
-    if max_rows is not None:
-        df = df.iloc[:max_rows]
-    if max_cols is not None:
-        df = df.iloc[:, :max_cols]
     html_content = df.to_html(index=False) # index=False to omit index column
     
     # Parse HTML to extract table data
@@ -390,54 +367,13 @@ def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = N
             row_data.append(cell.get_text())
         table_data.append(row_data)
     
-    # Create reportlab table with auto-sizing if requested
-    if shrink_to_fit and len(table_data) > 0:
-        # Calculate available width (landscape letter minus margins)
-        from reportlab.lib.pagesizes import landscape, letter
-        page_width = landscape(letter)[0]
-        available_width = page_width - 72  # 1 inch margins on each side
-        
-        # Estimate column widths based on content
-        col_count = len(table_data[0])
-        if col_count > 0:
-            # Check if this is a pairs report by looking for 'Pair_Names' column
-            headers = table_data[0] if len(table_data) > 0 else []
-            pair_names_idx = None
-            for i, header in enumerate(headers):
-                if 'Pair_Names' in str(header):
-                    pair_names_idx = i
-                    break
-            
-            if pair_names_idx is not None:
-                # Special column widths for pairs report - make Pair_Names column 2x wider
-                base_width = available_width / (col_count + 1)  # Extra space for 2x column
-                col_widths = [base_width] * col_count
-                col_widths[pair_names_idx] = base_width * 2  # Make Pair_Names 2x wider
-                
-                # Adjust other columns to fit the remaining space
-                remaining_width = available_width - col_widths[pair_names_idx]
-                other_width = remaining_width / (col_count - 1)
-                for i in range(col_count):
-                    if i != pair_names_idx:
-                        col_widths[i] = other_width
-            else:
-                # Default equal column widths
-                col_widths = [available_width / col_count] * col_count
-            
-            table = Table(table_data, repeatRows=1, colWidths=col_widths)
-        else:
-            table = Table(table_data, repeatRows=1)
-    else:
-        table = Table(table_data, repeatRows=1)
-    
-    # Adjust font size for better fit when shrinking
-    font_size = 7 if shrink_to_fit else 9
+    # Create reportlab table
+    table = Table(table_data)
     
     table_style = [
         ('BACKGROUND', (0, 0), (-1, 0), '#E5E5E5'),
         ('GRID', (0, 0), (-1, -1), 1, '#D5D5D5'),
-        ('FONTSIZE', (0, 0), (-1, -1), font_size),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Align text to top of cells
+        ('FONTSIZE', (0, 0), (-1, -1), 9) # cell font size is 8 throughout grid
     ]
 
     # Alternate row colors for even and odd rows
@@ -451,7 +387,7 @@ def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = N
     return table
 
 
-def create_pdf(pdf_assets, title, output_filename=None, max_rows: int | None = None, max_cols: int | None = 11, rows_per_page: int | list[int] | tuple[int, ...] | None = None, shrink_to_fit: bool = False):
+def create_pdf(pdf_assets, title, output_filename=None, max_rows=30, rows_per_page=None, shrink_to_fit=None):
     # Create a BytesIO object to capture the PDF data
     buffer = BytesIO()
     
@@ -465,47 +401,6 @@ def create_pdf(pdf_assets, title, output_filename=None, max_rows: int | None = N
     # Get a sample style sheet
     styles = getSampleStyleSheet()
     
-    def _iter_paginated_frames(frame, limit_rows: int | None, per_page_spec):
-        # Convert Polars to pandas if needed
-        import pandas as pd  # local import for safety
-        if isinstance(frame, pl.DataFrame):
-            frame = frame.to_pandas()
-        elif not isinstance(frame, pd.DataFrame):
-            return []
-
-        total_rows = len(frame) if limit_rows is None else min(limit_rows, len(frame))
-        if total_rows <= 0:
-            return []
-
-        # Determine first-page and subsequent-page row counts
-        if per_page_spec is None:
-            # default: old behavior of ~30 rows per chunk
-            first_count = 30
-            subsequent_count = 30
-        elif isinstance(per_page_spec, int):
-            first_count = per_page_spec
-            subsequent_count = per_page_spec
-        else:
-            seq = list(per_page_spec)
-            first_count = seq[0] if len(seq) > 0 else 30
-            subsequent_count = seq[1] if len(seq) > 1 else first_count
-
-        # Build page slices
-        idx = 0
-        parts = []
-        # First page
-        take = min(first_count, total_rows - idx)
-        if take > 0:
-            parts.append(frame.iloc[idx:idx+take, :])
-            idx += take
-        # Subsequent pages
-        while idx < total_rows:
-            take = min(subsequent_count, total_rows - idx)
-            parts.append(frame.iloc[idx:idx+take, :])
-            idx += take
-        return parts
-
-    previous_was_table = False
     for a in pdf_assets:
         # Convert Markdown string to reportlab paragraphs and add them to the story
         if isinstance(a, pl.DataFrame):
@@ -516,27 +411,15 @@ def create_pdf(pdf_assets, title, output_filename=None, max_rows: int | None = N
                 story.append(Spacer(1, 20))
             story.extend(markdown_to_paragraphs(a, styles))
         # Convert each DataFrame in the list to a reportlab table and add it to the story
-        elif isinstance(a, pd.DataFrame) or isinstance(a, pl.DataFrame):
-            # Build paginated tables with header repeating per page
-            if rows_per_page is None and max_rows is None:
-                # Use the provided frame as-is (no internal chunking)
-                frames = [a]
-            else:
-                frames = _iter_paginated_frames(a, max_rows, rows_per_page)
-                if not frames:
-                    frames = [a]
-            # Insert page break between successive table chunks/assets
-            if previous_was_table:
-                story.append(PageBreak())
-            for i, part in enumerate(frames):
-                # Ensure at least 2 columns to avoid ReportLab issues
-                if isinstance(part, pd.DataFrame) and len(part.columns) == 1:
-                    part = pd.concat([part, pd.Series('', name='', index=part.index)], axis='columns')
-                story.append(dataframe_to_table(part, max_rows=None, max_cols=max_cols, shrink_to_fit=shrink_to_fit))
-                # Force a page break between chunks on same asset except after the last chunk
-                if i < len(frames) - 1:
-                    story.append(PageBreak())
-            previous_was_table = True
+        elif isinstance(a, pd.DataFrame):
+            #print_to_log_info('a:',len(a),len(a.columns))
+            if len(a.columns) == 1:
+                a = pd.concat([a,pd.Series('',name='',index=a.index)],axis='columns') # workaround: 1 column dataframes error out so append a blank column
+            story.append(dataframe_to_table(a.iloc[0:max_rows,0:11]))
+            story.append(Spacer(1, 12))
+        elif isinstance(a, pl.DataFrame):
+            story.append(dataframe_to_table(a[:max_rows,:11]))
+            story.append(Spacer(1, 12))
         else:
             assert False, f"Unknown asset type: {type(a)}"
     

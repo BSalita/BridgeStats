@@ -91,6 +91,7 @@ from collections import defaultdict
 from enum import Enum
 import time
 import json
+import re
 from tqdm import tqdm
 from IPython.display import display
 import numpy as np
@@ -98,6 +99,7 @@ import logging
 from mlBridgeLib.logging_config import setup_logger
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+import torch.nn.functional as F
 from typing import Any, Optional, Dict, List, Tuple, Iterable, Callable, Union
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -841,7 +843,6 @@ def compute_scaling_parameters(df: pl.DataFrame, apply_scaling: bool = True, ver
 
     for col in tqdm(numeric_cols, desc="scaling-features", leave=False):
         try:
-            import numpy as np
             series = df[col]
             dt = series.dtype
 
@@ -899,8 +900,6 @@ def apply_feature_scaling(
     return scaled_data
 
 # gpt-5 says: Shared helpers to deduplicate tensor construction across DF/shards/inference.
-from typing import Optional as Optional
-
 def build_continuous_tensor(
     df: pl.DataFrame,
     numerical_feature_cols: List[str],
@@ -1132,7 +1131,6 @@ def generate_and_save_schema_core(
         return dt == pl.Categorical
     
     # Blacklist patterns for columns to exclude (supports regex patterns)
-    import re
     if blacklist_patterns is None:
         blacklist_patterns = [
             r'.*name.*',           # Any column containing 'name' (case-insensitive)
@@ -1992,7 +1990,6 @@ def train_model_regression_from_tensors(
     verbose: bool = True,
     feature_cols: Optional[List[str]] = None,
 ):
-    import json, pathlib
     # input_dim = continuous-only; embeddings handled inside the model
     input_dim = int(Xc_train.shape[1]) if Xc_train.ndim == 2 else 0
 
@@ -2507,7 +2504,6 @@ def shard_batch_iterator_with_schema(
     Iterator over raw shards applying schema scaling/mappings and fetching y on-the-fly.
     - y_provider: function(row_ids_np) -> y_np, required if shards contain 'row_ids' and y is not present.
     """
-    import torch
     cont_cols = schema.get('numerical_feature_cols', [])
     cat_cols = schema.get('categorical_feature_cols', [])
     scaling_params = schema.get('scaling_params', {})
@@ -3260,7 +3256,7 @@ def train_model_from_tensors(
         )
 
 
-def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, df: pl.DataFrame, max_samples: Optional[int] = None) -> pl.DataFrame:
+def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, df: pl.DataFrame, device: str = 'cpu', max_samples: Optional[int] = None) -> pl.DataFrame:
     """
     Embeddings-aware prediction:
     - Builds (X_cont, X_cat) via df_to_scaled_tensors (respects schema scaling).
@@ -3268,14 +3264,15 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
     - Reads first linear layer in_features (ignoring embedding matrices) for a correct shape check.
     - Runs batched inference passing both x_cont and x_cat to the model.
     """
-    import pathlib, json, torch, numpy as np
-    import polars as pl
 
     # Load model
     model_file = resolve_model_path(saved_models_path, model_name)
     if not model_file.exists():
         raise FileNotFoundError(f"Model file not found: {model_file}")
-    state_dict = torch.load(model_file, map_location='cpu', weights_only=False)
+    
+    # Determine device and load model accordingly
+    device_t = torch.device(device if device == 'cuda' and torch.cuda.is_available() else 'cpu')
+    state_dict = torch.load(model_file, map_location=device_t, weights_only=False)
 
     # Load schema
     schema_path = resolve_schema_path(saved_models_path, model_name)
@@ -3391,8 +3388,7 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
     model = MLP(input_dim=int(Xc.shape[1]), cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout)
     model.load_state_dict(state_dict)
 
-    # Device + inference
-    device_t, _, _ = setup_amp('cuda', use_amp=True)
+    # Move model to specified device for inference
     model = model.to(device_t).eval()
 
     # Ensure tensors are correct dtype
@@ -3427,6 +3423,7 @@ def predict_model(
     model_name: str,
     df: pl.DataFrame,
     # 🔍 INFERENCE-ONLY PARAMETERS: Do not affect training
+    device: str = 'cpu',  # Device for inference: 'cpu' or 'cuda'
     max_samples: Optional[int] = None,
     top_k: int = 1,  # Classification only
     return_probs: bool = False,  # Classification only
@@ -3438,6 +3435,7 @@ def predict_model(
     - layers, dropout, y_range, apply_scaling, features, scaling, mappings
     
     🔍 INFERENCE-ONLY PARAMETERS (do not affect training):
+    - device: Device for inference ('cpu' or 'cuda'). Defaults to 'cpu' for compatibility.
     - max_samples: Limit number of samples for quick testing
     - top_k: Return top K class predictions (classification only)
     - return_probs: Include prediction probabilities (classification only)
@@ -3448,6 +3446,7 @@ def predict_model(
             saved_models_path=saved_models_path,
             model_name=model_name,
             df=df,
+            device=device,
             max_samples=max_samples,
         )
     else:
@@ -3455,6 +3454,7 @@ def predict_model(
             saved_models_path=saved_models_path,
             model_name=model_name,
             df=df,
+            device=device,
             top_k=top_k,
             max_samples=max_samples,
             return_probs=return_probs,
@@ -3466,6 +3466,7 @@ def predict_classification_model(
     df: pl.DataFrame,
     classes: Optional[List[Any]] = None,
     idx_to_class: Optional[Dict[int, Any]] = None,
+    device: str = 'cpu',
     top_k: int = 1,
     max_samples: Optional[int] = None,
     return_probs: bool = False,
@@ -3487,20 +3488,15 @@ def predict_classification_model(
     - Else we infer `num_classes` from the checkpoint's last linear layer; labels will
       be integer codes unless `y_name` is present in df and we can derive a vocab.
     """
-    import json
-    import torch
-    import numpy as np
-    import polars as pl
-    import pathlib as _pathlib
-    import re as _re
-    from typing import List as _List, Any as _Any, Dict as _Dict
-    import torch.nn.functional as F
 
     # Load model state
     model_file = resolve_model_path(saved_models_path, model_name)
     if not model_file.exists():
         raise FileNotFoundError(f"Model file not found: {model_file}")
-    state_dict = torch.load(model_file, map_location='cpu', weights_only=False)
+    
+    # Determine device and load model accordingly
+    device_t = torch.device(device if device == 'cuda' and torch.cuda.is_available() else 'cpu')
+    state_dict = torch.load(model_file, map_location=device_t, weights_only=False)
 
     # Load schema
     schema_path = resolve_schema_path(saved_models_path, model_name)
@@ -3617,7 +3613,7 @@ def predict_classification_model(
         # Try to find the last linear layer by highest net index; fallback to smallest out_features
         net_weight_layers = [(k, v) for k, v in linear_candidates if k.startswith('net.') and k.endswith('.weight')]
         def _net_index(name: str) -> int:
-            m = _re.match(r'^net\.(\d+)\.weight$', name)
+            m = re.match(r'^net\.(\d+)\.weight$', name)
             return int(m.group(1)) if m else -1
         if net_weight_layers:
             last_key, last_w = max(net_weight_layers, key=lambda kv: _net_index(kv[0]))
@@ -3679,8 +3675,7 @@ def predict_classification_model(
     except Exception:
         model.load_state_dict(state_dict, strict=False)
 
-    # Device + inference
-    device_t, _, _ = setup_amp('cuda', use_amp=True)
+    # Move model to specified device for inference
     model = model.to(device_t).eval()
 
     # Ensure tensor dtypes and existence
@@ -3691,9 +3686,9 @@ def predict_classification_model(
         # For concatenation approach, categorical features should be float
         Xk = None if Xk is None or (hasattr(Xk, 'numel') and Xk.numel() == 0) else torch.as_tensor(Xk, dtype=torch.float32)
 
-    pred_codes: _List[int] = []
-    topk_codes: _List[_List[int]] = []
-    probs_out: _List[_List[float]] = []
+    pred_codes: List[int] = []
+    topk_codes: List[List[int]] = []
+    probs_out: List[List[float]] = []
 
     bs = 8192
     with torch.no_grad():
@@ -4356,7 +4351,6 @@ def _create_classification_plots(y_true, y_pred, confusion_matrix, labels, per_c
         # Order labels by frequency (descending), then by string for stability
         sorted_labels = sorted(true_counts_map.items(), key=lambda kv: (-kv[1], str(kv[0])))
         # Try decreasing caps until matrix is small enough to annotate
-        import numpy as _np
         candidates = [100, 80, 60, 50, 40, 30, 20, 10]
         plot_labels = list(labels)
         cm_view = confusion_matrix
@@ -4367,7 +4361,7 @@ def _create_classification_plots(y_true, y_pred, confusion_matrix, labels, per_c
             sel = [kv[0] for kv in sorted_labels[:min(cap, len(sorted_labels))]]
             sel_idx = [label_to_idx_local[lbl] for lbl in sel if lbl in label_to_idx_local]
             if sel_idx:
-                cm_try = confusion_matrix[_np.ix_(sel_idx, sel_idx)]
+                cm_try = confusion_matrix[np.ix_(sel_idx, sel_idx)]
                 # Aim for annotatable size (<= 40 classes)
                 if cm_try.shape[0] <= 40:
                     cm_view = cm_try
@@ -4556,8 +4550,7 @@ def analyze_prediction_results_classification(
         if topk_preds_col is not None and topk_preds_col in results_df.columns:
             try:
                 # Parse the number from a name like f"{y_name}_Top{K}_Preds"
-                import re as _re
-                m = _re.search(r"_Top(\d+)_Preds$", topk_preds_col)
+                m = re.search(r"_Top(\d+)_Preds$", topk_preds_col)
                 if m:
                     inferred_top_k = int(m.group(1))
             except Exception:
@@ -4592,11 +4585,6 @@ def display_feature_importances_regression(
     Safely expands categorical embedding features to per-dimension names so
     the name list matches the model's first-layer input width.
     """
-    import pathlib
-    import json
-    import numpy as np
-    import polars as pl
-    import torch
 
     model_path = resolve_model_path(saved_models_path, model_name)
     assert model_path.exists(), f"Model file not found: {model_path}"
