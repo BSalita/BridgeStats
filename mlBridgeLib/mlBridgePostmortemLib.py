@@ -472,7 +472,7 @@ class PostmortemBase(ABC):
             try:
                 import streamlitlib
                 if st.session_state.pdf_link.download_button(
-                    label="Download Personalized Report",
+                    label="Download Personalized Report PDF",
                     data=streamlitlib.create_pdf(
                         st.session_state.pdf_assets, 
                         title=f"Bridge Game Postmortem Report Personalized for {getattr(st.session_state, 'player_id', 'Player')}"
