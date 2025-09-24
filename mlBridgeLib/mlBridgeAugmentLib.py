@@ -6050,7 +6050,7 @@ class FinalContractAugmenter:
         assert 'BidLvl' in self.df.columns, "Required column 'BidLvl' not found in DataFrame"
         assert 'BidSuit' in self.df.columns, "Required column 'BidSuit' not found in DataFrame"
         
-        self.df = self._time_operation("create contract dependent DD scores", add_dd_scores_contract_dependent, self.df)
+        self.df = add_dd_scores_contract_dependent(self.df)
         
         # Assert columns were created
         assert 'DD_Score_Declarer' in self.df.columns, "Column 'DD_Score_Declarer' was not created"
