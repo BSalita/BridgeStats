@@ -63,7 +63,7 @@ vul_syms = ['None','N_S','E_W','Both']
 vul_sym_to_index_d = {'None':0, 'N_S':1, 'E_W':2, 'Both':3}
 vul_directions = [[],[0,2],[1,3],[0,1,2,3]]
 contract_types = ['Pass','Partial','Game','SSlam','GSlam']
-dealer_d = {'N':0, 'E':1, 'S':2, 'W':3}
+dealer_d = {'N':0, 'E':1, 'S':2, 'W':3} # NULL if PASS?
 seats = ['N','E','S','W','NS','EW'] # Par score player's direction codes
 PlayerDirectionToPairDirection = {'N':'NS','E':'EW','S':'NS','W':'EW'}
 PairDirectionToOpponentPairDirection = {'NS':'EW','EW':'NS'}
@@ -72,18 +72,18 @@ allHigherContracts_d = {c:allContracts[n+1:] for n,c in enumerate(allContracts)}
 suit_names_d = {'S':'Spades','H':'Hearts','D':'Diamonds','C':'Clubs','N':'No-Trump'}
 contract_classes = ['PASS'] + [level+suit+dbl+decl for level in '1234567' for suit in 'CDHSN' for dbl in ['','X','XX'] for decl in 'NESW']
 contract_classes_dtype = pd.CategoricalDtype(contract_classes, ordered=False)
-declarer_direction_to_pair_direction = {'N':'NS','S':'NS','E':'EW','W':'EW'}
+declarer_direction_to_pair_direction = {'N':'NS','S':'NS','E':'EW','W':'EW'} # NULL if PASS?
 # creates a dict all possible opening bids in auction order. key is npasses and values are opening bids.
 auction_order = [level+suit for level in '1234567' for suit in 'CDHSN']+['x','xx','p'] # todo: put into mlBridgeLib
 # want to make these python enums but the '' in Dbl_enum isn't allowed. So back to pl.Enum we go.
-BidSuit_enum = pl.Enum(['C', 'D', 'H', 'S', 'N']) # but could be None if PASS
+BidSuit_enum = pl.Enum(['C', 'D', 'H', 'S', 'N']) # NULL if PASS?
 ContractType_enum = pl.Enum(['Pass', 'Partial', 'Game', 'SSlam', 'GSlam'])
-Dbl_enum = pl.Enum(['', 'X', 'XX']) # but could be None if PASS
+Dbl_enum = pl.Enum(['', 'X', 'XX']) # NULL if PASS?
 Vul_enum = pl.Enum(['None', 'N_S', 'E_W', 'Both']) # todo: why not NS|EW?
 Dealer_enum = pl.Enum(['N', 'E', 'S', 'W'])
-Declarer_Direction_enum = pl.Enum(['N', 'E', 'S', 'W']) # but could be None if PASS
+Declarer_Direction_enum = pl.Enum(['N', 'E', 'S', 'W', 'NULL']) # NULL if PASS
 Opponent_Pair_Direction_enum = pl.Enum(['NS', 'EW'])
-Declarer_Pair_Direction_enum = pl.Enum(['NS', 'EW'])
+Declarer_Pair_Direction_enum = pl.Enum(['NS', 'EW']) # NULL if PASS?
 Contract_enum = pl.Enum(['PASS']+[str(level)+strain+dbl+direction for level in range(1,8) for strain in 'CDHSN' for dbl in ['','X','XX'] for direction in 'NESW']) # but could be None if PASS
 SL_ML_SJ_enum = pl.Enum([
     f"{a}-{b}-{c}-{d}"
@@ -126,7 +126,7 @@ Direction_to_NESW_d = {
     'east': 'E',
     'south': 'S',
     'west': 'W', # only 'west' is used in ACBL data, not 'north', 'east', or 'south'. not sure why.
-    '': '', # passed-out so no declarer direction
+    '': '', # passed-out so no declarer direction # NULL if PASS?
     None: None, # needed in hand_records_clean
 }
 

@@ -2,6 +2,7 @@
 # mostly polars functions
 
 # todo:
+# DD_Score_\d_[CDHSN]_[NESW] has reversed strain and direction columns compared to other column naming conventions.
 # optimize slow functions: _create_dd_columns() and calculate_final_scores()
 # since some columns can be derived from other columns, we should assert that input df has at least one column in each group of mutually derivable columns.
 # assert that column names don't exist in df.columns for all column creation functions.
@@ -218,7 +219,7 @@ def extract_suits_by_seat(df: pl.DataFrame) -> pl.DataFrame:
 
 
 # One Hot Encoded into binary string
-def encode_hands_binary(hands_bin: List[List[Tuple[Optional[str], Optional[str]]]]) -> defaultdict[str, List[Any]]:
+def encode_hands_binary(hands_bin: list[list[Tuple[Optional[str], Optional[str]]]]) -> defaultdict[str, list[Any]]:
     """One-hot encode hands into binary-like fields (legacy helper).
 
     Purpose:
@@ -618,8 +619,6 @@ def add_quick_tricks(df: pl.DataFrame) -> pl.DataFrame:
     
     # Apply partnership QT by suit calculations
     return df.with_columns(partnership_qt_suit)
-
-
 def add_suit_lengths(df: pl.DataFrame) -> pl.DataFrame:
     """Create suit length columns from suit string columns using vectorized operations.
 
@@ -915,7 +914,7 @@ def precompute_contract_score_tables() -> Tuple[Dict[Tuple, int], Dict[Tuple, in
     data = []
     
     for suit in 'SHDCN':
-        for level in range(1,8):
+        for level in range(1, 8):
             col_name = f'Score_{level}{suit}'
             columns.append(col_name)
             col_data = [[scores_d[(level,suit,i,False)], scores_d[(level,suit,i,True)]] for i in range(14)]
@@ -966,204 +965,6 @@ def expand_scores_by_vulnerability(scores_df: pl.DataFrame) -> pl.DataFrame:
     return df_scores.with_columns(exploded_expressions).drop(df_scores.columns)
 
 
-def build_vulnerability_conditions() -> Dict[str, pl.Expr]:
-    """Create vulnerability condition expressions for pair-specific vulnerability logic.
-
-    Purpose:
-    - Generate Polars expressions for vulnerability-based conditional logic
-    - Enable efficient vulnerability checks in complex calculations
-    - Provide reusable vulnerability conditions for multiple operations
-
-    Parameters:
-    - None (creates expressions referencing standard columns)
-
-    Returns:
-    - Dict[str, pl.Expr]: Dictionary mapping pair names to vulnerability expressions
-
-    Input columns:
-    - 'Vul': String vulnerability column referenced in returned expressions
-
-    Output columns:
-    - Returns expressions, not DataFrame columns directly
-
-    Returns:
-    - 'NS': Expression checking if North-South is vulnerable
-    - 'EW': Expression checking if East-West is vulnerable
-    """
-    return {
-        'NS': pl.col('Vul').is_in(['N_S', 'Both']),
-        'EW': pl.col('Vul').is_in(['E_W', 'Both']),
-    }
-
-
-def build_ev_expressions_for_pair(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    """Build expected value expressions for a pair considering vulnerability.
-
-    Purpose:
-    - Create vulnerability-conditional expressions for expected value calculations
-    - Select appropriate vulnerable/non-vulnerable EV values based on board conditions
-    - Generate both max value and max column reference expressions
-
-    Parameters:
-    - pd: Pair direction ('NS' or 'EW')
-    - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
-
-    Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional EV
-
-    Input columns:
-    - 'EV_{pd}_V_Max': Maximum vulnerable EV for the pair
-    - 'EV_{pd}_NV_Max': Maximum non-vulnerable EV for the pair
-    - 'EV_{pd}_V_Max_Col': Column name with maximum vulnerable EV
-    - 'EV_{pd}_NV_Max_Col': Column name with maximum non-vulnerable EV
-
-    Output columns:
-    - 'EV_Max_{pd}': Vulnerability-conditional maximum EV
-    - 'EV_Max_Col_{pd}': Vulnerability-conditional max EV column reference
-    """
-    return [
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_V_Max')).otherwise(pl.col(f'EV_{pd}_NV_Max')).alias(f'EV_Max_{pd}'),
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_V_Max_Col')).otherwise(pl.col(f'EV_{pd}_NV_Max_Col')).alias(f'EV_Max_Col_{pd}')
-    ]
-
-
-def build_ev_expressions_for_declarer(pd: str, dd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    """Build expected value expressions for a specific declarer considering vulnerability.
-
-    Purpose:
-    - Create vulnerability-conditional expressions for declarer-specific expected values
-    - Select appropriate vulnerable/non-vulnerable values based on board and declarer
-    - Generate max value and column reference expressions for declarer analysis
-
-    Parameters:
-    - pd: Pair direction ('NS' or 'EW')
-    - dd: Declarer direction ('N', 'E', 'S', 'W')
-    - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
-
-    Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional declarer EV
-
-    Input columns:
-    - 'EV_{pd}_{dd}_V_Max': Maximum vulnerable EV for specific declarer
-    - 'EV_{pd}_{dd}_NV_Max': Maximum non-vulnerable EV for specific declarer
-    - 'EV_{pd}_{dd}_V_Max_Col': Column name with maximum vulnerable declarer EV
-    - 'EV_{pd}_{dd}_NV_Max_Col': Column name with maximum non-vulnerable declarer EV
-
-    Output columns:
-    - 'EV_Max_{pd}_{dd}': Vulnerability-conditional maximum declarer EV
-    - 'EV_Max_Col_{pd}_{dd}': Vulnerability-conditional max declarer EV column reference
-    """
-    return [
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_{dd}_V_Max')).otherwise(pl.col(f'EV_{pd}_{dd}_NV_Max')).alias(f'EV_Max_{pd}_{dd}'),
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_{dd}_V_Max_Col')).otherwise(pl.col(f'EV_{pd}_{dd}_NV_Max_Col')).alias(f'EV_Max_Col_{pd}_{dd}')
-    ]
-
-
-def build_ev_expressions_for_strain(pd: str, dd: str, s: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    """Build expected value expressions for a specific strain considering vulnerability.
-
-    Purpose:
-    - Create vulnerability-conditional expressions for strain-specific expected values
-    - Select appropriate vulnerable/non-vulnerable values based on board, declarer, and strain
-    - Generate max value and column reference expressions for suit analysis
-
-    Parameters:
-    - pd: Pair direction ('NS' or 'EW')
-    - dd: Declarer direction ('N', 'E', 'S', 'W')
-    - s: Strain ('C', 'D', 'H', 'S', 'N')
-    - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
-
-    Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional strain EV
-
-    Input columns:
-    - 'EV_{pd}_{dd}_{s}_V_Max': Maximum vulnerable EV for specific strain
-    - 'EV_{pd}_{dd}_{s}_NV_Max': Maximum non-vulnerable EV for specific strain
-    - 'EV_{pd}_{dd}_{s}_V_Max_Col': Column name with maximum vulnerable strain EV
-    - 'EV_{pd}_{dd}_{s}_NV_Max_Col': Column name with maximum non-vulnerable strain EV
-
-    Output columns:
-    - 'EV_Max_{pd}_{dd}_{s}': Vulnerability-conditional maximum strain EV
-    - 'EV_Max_Col_{pd}_{dd}_{s}': Vulnerability-conditional max strain EV column reference
-    """
-    return [
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_{dd}_{s}_V_Max')).otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_Max')).alias(f'EV_Max_{pd}_{dd}_{s}'),
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_{dd}_{s}_V_Max_Col')).otherwise(pl.col(f'EV_{pd}_{dd}_{s}_NV_Max_Col')).alias(f'EV_Max_Col_{pd}_{dd}_{s}')
-    ]
-
-
-def build_ev_expressions_for_level(pd: str, dd: str, s: str, l: int, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    """Build expected value expressions for a specific contract level considering vulnerability.
-
-    Purpose:
-    - Create vulnerability-conditional expressions for level-specific expected values
-    - Select appropriate vulnerable/non-vulnerable values based on complete contract specification
-    - Generate expressions for detailed contract-level analysis
-
-    Parameters:
-    - pd: Pair direction ('NS' or 'EW')
-    - dd: Declarer direction ('N', 'E', 'S', 'W')
-    - s: Strain ('C', 'D', 'H', 'S', 'N')
-    - l: Contract level (1-7)
-    - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
-
-    Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional level EV
-
-    Input columns:
-    - 'EV_{pd}_{dd}_{s}_{l}_V': Vulnerable EV for specific contract
-    - 'EV_{pd}_{dd}_{s}_{l}_NV': Non-vulnerable EV for specific contract
-
-    Output columns:
-    - 'EV_{pd}_{dd}_{s}_{l}': Vulnerability-conditional EV for specific contract
-    """
-    return [
-        pl.when(get_vulnerability_conditions[pd]).then(pl.col(f'EV_{pd}_{dd}_{s}_{l}_V')).otherwise(pl.col(f'EV_{pd}_{dd}_{s}_{l}_NV')).alias(f'EV_{pd}_{dd}_{s}_{l}')
-    ]
-
-
-def build_pair_ev_expressions(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    """Build comprehensive expected value expressions for a pair across all scenarios.
-
-    Purpose:
-    - Create vulnerability-conditional expressions for comprehensive pair analysis
-    - Generate expressions for partnership-level expected value calculations
-    - Support advanced bidding and play analysis with complete EV coverage
-
-    Parameters:
-    - pd: Pair direction ('NS' or 'EW')
-    - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
-
-    Returns:
-    - List[pl.Expr]: List of Polars expressions for comprehensive pair EV analysis
-
-    Input columns:
-    - Various EV columns with '_V' and '_NV' suffixes for all scenarios
-
-    Output columns:
-    - Comprehensive set of vulnerability-conditional EV columns for the pair
-    """
-    expressions = []
-    
-    # Add pair-level expressions
-    expressions.extend(build_ev_expressions_for_pair(pd, get_vulnerability_conditions))
-    
-    # Add declarer-level expressions
-    for dd in 'NESW':
-        if (pd == 'NS' and dd in 'NS') or (pd == 'EW' and dd in 'EW'):
-            expressions.extend(build_ev_expressions_for_declarer(pd, dd, get_vulnerability_conditions))
-            
-            # Add strain-level expressions
-            for s in 'CDHSN':
-                expressions.extend(build_ev_expressions_for_strain(pd, dd, s, get_vulnerability_conditions))
-                
-                # Add level-specific expressions
-                for l in range(1, 8):
-                    expressions.extend(build_ev_expressions_for_level(pd, dd, s, l, get_vulnerability_conditions))
-    
-    return expressions
-
-
 # =============================================================================
 # SECTION 4: DD/SD CORE COMPUTATION FUNCTIONS
 # =============================================================================
@@ -1172,7 +973,7 @@ def build_pair_ev_expressions(pd: str, get_vulnerability_conditions: Dict[str, p
 # Temporal order: Fourth - these perform the heavy computational work
 # =============================================================================
 
-def display_dd_deals(deals: List[Deal], dd_result_tables: List[Any], deal_index: int = 0, max_display: int = 4) -> None:
+def display_dd_deals(deals: list[Deal], dd_result_tables: list[Any], deal_index: int = 0, max_display: int = 4) -> None:
     """Pretty-print a few deals and their double-dummy result tables.
 
     Purpose:
@@ -1203,7 +1004,7 @@ def display_dd_deals(deals: List[Deal], dd_result_tables: List[Any], deal_index:
 
 
 # todo: could save a couple seconds by creating dict of deals
-def solve_dd_for_deals(deals: List[Deal], batch_size: int = 40, output_progress: bool = False, progress: Optional[Any] = None) -> List[Any]:
+def solve_dd_for_deals(deals: list[Deal], batch_size: int = 40, output_progress: bool = False, progress: Optional[Any] = None) -> list[Any]:
     """Compute double-dummy tables for a list of `Deal`s in batches.
 
     Purpose:
@@ -1253,7 +1054,6 @@ def solve_dd_for_deals(deals: List[Deal], batch_size: int = 40, output_progress:
     return all_result_tables
 
 
-# takes 10000/hour
 def compute_dd_trick_tables(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, max_dd_adds: Optional[int] = None, output_progress: bool = True, progress: Optional[Any] = None) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """Compute and return double-dummy trick tables for missing PBNs.
 
@@ -1346,8 +1146,6 @@ def compute_dd_trick_tables(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, ma
     assert len(error_filtered_schema) == 0, f"error_filtered_schema: {error_filtered_schema}"
     dd_df = pl.DataFrame(d, schema=filtered_schema)
     return dd_df, unique_dd_tables_d
-
-
 def compute_par_scores_for_missing(hrs_df: pl.DataFrame, hrs_cache_df: pl.DataFrame, unique_dd_tables_d: Dict[str, Any]) -> pl.DataFrame:
     """Calculate par scores and contracts for PBNs that need them using DD tables.
 
@@ -1546,7 +1344,7 @@ def deal_generation_constraints(deal: Deal) -> bool:
     return True
 
 
-def generate_single_dummy_deals(predeal_string: str, produce: int, env: Dict[str, Any] = dict(), max_attempts: int = 1000000, seed: int = 42, show_progress: bool = True, strict: bool = True, swapping: int = 0) -> Tuple[Tuple[Deal, ...], List[Any]]:
+def generate_single_dummy_deals(predeal_string: str, produce: int, env: Dict[str, Any] = dict(), max_attempts: int = 1000000, seed: int = 42, show_progress: bool = True, strict: bool = True, swapping: int = 0) -> Tuple[Tuple[Deal, ...], list[Any]]:
     """Generate deals for single-dummy simulation given a predeal string.
 
     Purpose:
@@ -1588,7 +1386,7 @@ def generate_single_dummy_deals(predeal_string: str, produce: int, env: Dict[str
     return deals, solve_dd_for_deals(deals)
 
 
-def estimate_sd_trick_distributions(deal: str, produce: int = 100) -> Tuple[Dict[str, pl.DataFrame], Tuple[int, Dict[Tuple[str, str, str], List[float]]]]:
+def estimate_sd_trick_distributions(deal: str, produce: int = 100) -> Tuple[Dict[str, pl.DataFrame], Tuple[int, Dict[Tuple[str, str, str], list[float]]]]:
     """Estimate single-dummy trick distributions by side (NS/EW) for a given deal string.
 
     Purpose:
@@ -1666,7 +1464,6 @@ def estimate_sd_trick_distributions(deal: str, produce: int = 100) -> Tuple[Dict
 #     return sd_cache_d
 
 
-# performs at 10000/hr
 def estimate_sd_trick_distributions_for_df(df: pl.DataFrame, hrs_cache_df: pl.DataFrame, sd_productions: int = 100, max_sd_adds=100, progress: Optional[Any] = None) -> Tuple[Dict[str, pl.DataFrame], pl.DataFrame]:
     """Compute and cache single-dummy probabilities for PBNs needing them.
 
@@ -1727,7 +1524,8 @@ def estimate_sd_trick_distributions_for_df(df: pl.DataFrame, hrs_cache_df: pl.Da
         logger.info(f"limit: {max_sd_adds=} {len(pbns_to_process)=}")
     cleaned_pbns = [Deal(pbn) for pbn in pbns_to_process]
     assert all([pbn == dpbn.to_pbn() for pbn,dpbn in zip(pbns_to_process,cleaned_pbns)]), [(pbn,dpbn.to_pbn()) for pbn,dpbn in zip(pbns_to_process,cleaned_pbns) if pbn != dpbn.to_pbn()] # usually a sort order issue which should have been fixed in previous step
-    logger.info(f"processing time assuming 10000/hour:{len(pbns_to_process)/10000} hours")
+    estimated_processing_time_per_hour = 8000
+    logger.info(f"processing time assuming {estimated_processing_time_per_hour}/hour:{len(pbns_to_process)/estimated_processing_time_per_hour} hours")
     for i,pbn in enumerate(pbns_to_process):
         if progress:
             percent_complete = int(i*100/len(pbns_to_process))
@@ -1736,13 +1534,13 @@ def estimate_sd_trick_distributions_for_df(df: pl.DataFrame, hrs_cache_df: pl.Da
             elif hasattr(progress, 'set_description'): # tqdm
                 progress.set_description(f"{percent_complete}%: Single dummies calculated for {i} of {len(pbns_to_process)} unique deals using {sd_productions} samples per deal. This step takes 30 seconds...")
         else:
-            if i < 10 or i % 10000 == 0:
+            if i < 10 or i % estimated_processing_time_per_hour == 0:
                 percent_complete = int(i*100/len(pbns_to_process))
                 logger.info(f"{percent_complete}%: Single dummies calculated for {i} of {len(pbns_to_process)} unique deals using {sd_productions} samples per deal.")
-        if not progress and (i < 10 or i % 10000 == 0):
+        if not progress and (i < 10 or i % estimated_processing_time_per_hour == 0):
             t = time.time()
         sd_dfs_d[pbn], sd_d[pbn] = estimate_sd_trick_distributions(pbn, sd_productions) # all combinations of declarer pair direction, declarer direction, suit, tricks taken
-        if not progress and (i < 10 or i % 10000 == 0):
+        if not progress and (i < 10 or i % estimated_processing_time_per_hour == 0):
             logger.info(f"compute_sd_probabilities: time:{time.time()-t} seconds")
         #error
     if progress:
@@ -1990,8 +1788,6 @@ def find_max_horizontal_value(df: pl.DataFrame, pattern: str) -> Tuple[pl.Expr, 
     for col in cols[1:]:
         col_expr = col_expr.when(pl.col(col) == max_expr).then(pl.lit(col))
     return max_expr, col_expr.otherwise(pl.lit(""))
-
-
 # =============================================================================
 # SECTION 5: CONTRACT ANALYSIS FUNCTIONS
 # =============================================================================
@@ -2360,7 +2156,7 @@ def get_declarer_id(df: pl.DataFrame) -> pl.DataFrame:
 
 
 # convert to ml df needs to perform this.
-def compute_contract_result(df: pl.DataFrame) -> List[Optional[int]]:
+def compute_contract_result(df: pl.DataFrame) -> list[Optional[int]]:
     """Compute contract results by matching actual scores against expected score lists.
 
     Purpose:
@@ -2372,7 +2168,7 @@ def compute_contract_result(df: pl.DataFrame) -> List[Optional[int]]:
     - df: DataFrame containing contract and scoring information
     
     Returns:
-    - List[Optional[int]]: Contract results for each row (tricks over/under contract)
+    - list[Optional[int]]: Contract results for each row (tricks over/under contract)
 
     Input columns:
     - 'Contract': Contract string (must not be 'PASS')
@@ -2470,11 +2266,11 @@ def compute_expected_tricks(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-# def convert_contract_to_DD_Tricks(df: pl.DataFrame) -> List[Optional[int]]:
+# def convert_contract_to_DD_Tricks(df: pl.DataFrame) -> list[Optional[int]]:
 #     return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Declarer_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
-# def convert_contract_to_DD_Tricks_Dummy(df: pl.DataFrame) -> List[Optional[int]]:
+# def convert_contract_to_DD_Tricks_Dummy(df: pl.DataFrame) -> list[Optional[int]]:
 #     return [None if c is None or c == 'PASS' else df['_'.join(['DD',d,c[1]])][i] for i,(c,d) in enumerate(zip(df['Contract'],df['Dummy_Direction']))] # extract double dummy tricks using contract and declarer as the lookup keys
 
 
@@ -2618,7 +2414,6 @@ def add_distribution_points(df: pl.DataFrame) -> pl.DataFrame:
         for suit in "SHDC"
     ]
     return df.with_columns(dp_columns)
-
 def add_total_points(df: pl.DataFrame) -> pl.DataFrame:
     """Create Total_Points columns from HCP and DP columns.
 
@@ -2899,25 +2694,36 @@ def add_matchpoint_scores_from_raw(df: pl.DataFrame) -> pl.DataFrame:
     - Generate both North-South and East-West matchpoint perspectives
 
     Parameters:
-    - df: DataFrame containing raw scores and matchpoint top information
+    - df: DataFrame containing raw scores and grouping keys
 
     Returns:
     - pl.DataFrame: Input DataFrame with added matchpoint score columns
 
-    Input columns:
-    - 'Score_NS': Raw North-South score for each board result
-    - 'Score_EW': Raw East-West score for each board result
-    - 'MP_Top': Maximum possible matchpoints for the board
+    Grouping keys priority (used to define the comparison cohort per board):
+    - Always: 'session_id', 'Board'
+    - Prefer: 'section_id' if present, else 'section_name' if present
+    - Optionally include 'PBN' if present (for extra precision) but not required
 
     Output columns:
     - 'MP_NS': Matchpoint score for North-South pair
     - 'MP_EW': Matchpoint score for East-West pair (complement of MP_NS)
     """
+    # Determine grouping keys dynamically to avoid hard dependency on PBN
+    group_keys: list[str] = ['session_id', 'Board']
+    if 'section_id' in df.columns:
+        group_keys = ['session_id', 'section_id', 'Board']
+    elif 'section_name' in df.columns:
+        group_keys = ['session_id', 'section_name', 'Board']
+    # If PBN exists, include it for tighter grouping; otherwise skip
+    if 'PBN' in df.columns and 'PBN' not in group_keys: # todo: is this now obsolete? isn't session_id enough? what's the compute cost of including PBN?
+        # Insert before Board to keep stable order
+        group_keys = [k for k in group_keys if k != 'Board'] + ['PBN', 'Board']
+
     return df.with_columns([
         pl.col('Score_NS').rank(method='average', descending=False).sub(1)
-            .over(['session_id', 'PBN', 'Board']).alias('MP_NS'),
+            .over(group_keys).alias('MP_NS'),
         pl.col('Score_EW').rank(method='average', descending=False).sub(1)
-            .over(['session_id', 'PBN', 'Board']).alias('MP_EW'),
+            .over(group_keys).alias('MP_EW'),
     ])
 
 def add_percentage_scores(df: pl.DataFrame) -> pl.DataFrame:
@@ -3207,6 +3013,7 @@ def add_dd_scores_basic(df: pl.DataFrame, scores_d: Dict) -> pl.DataFrame:
     
     Output columns:
     - `DD_Score_[1-7][CDHSN]_[NESW]`: Double dummy scores for each contract/direction combo
+    - `DD_Score_[CDHSN]_[NESW]_Max`: Maximum double dummy score for each strain/direction combo
     """
     # Create scores for columns: DD_Score_[1-7][CDHSN]_[NESW]
     df = df.with_columns([
@@ -3221,10 +3028,18 @@ def add_dd_scores_basic(df: pl.DataFrame, scores_d: Dict) -> pl.DataFrame:
         for strain in mlBridgeLib.CDHSN
         for direction, pair_direction in [('N','NS'), ('E','EW'), ('S','NS'), ('W','EW')]
     ])
+    df = df.with_columns([
+        pl.max_horizontal(pl.col(f"^DD_Score_[1-7]{strain}_{direction}$")).alias(f"DD_Score_{strain}_{direction}_Max")
+        for strain in mlBridgeLib.CDHSN
+        for direction in 'NESW'
+    ])
+    df = df.with_columns([
+        pl.max_horizontal(pl.col(f"^DD_Score_{strain}_{pair_direction[0]}_Max$"),pl.col(f"^DD_Score_{strain}_{pair_direction[1]}_Max$")).alias(f"DD_Score_{strain}_{pair_direction}_Max")
+        for strain in mlBridgeLib.CDHSN
+        for pair_direction in ['NS','EW']
+    ])
     
     return df
-
-
 def add_dd_scores_contract_dependent(df: pl.DataFrame) -> pl.DataFrame:
     """Create contract-dependent DD_Score columns (requires BidLvl, BidSuit, Declarer_Direction).
     
@@ -3256,8 +3071,9 @@ def add_dd_scores_contract_dependent(df: pl.DataFrame) -> pl.DataFrame:
     - `BidSuit`: Contract strain (S/H/D/C/N)
     - `Declarer_Direction`: Declarer position (N/E/S/W)
     - `Declarer_Pair_Direction`: Declarer partnership (NS/EW)
-    - `DD_Score_[1-7][CDHSN]_[NESW]`: Basic DD scores for all contracts
-    
+    - `DD_Score_[1-7][CDHSN]_[NESW]`: Double dummy scores for each contract/direction combo
+    - `DD_Score_[CDHSN]_[NESW]_Max`: Double dummy scores for each contract/direction combo
+
     Output columns:
     - `DD_Score_Refs`: Reference string for DD score lookup
     - `DD_Score_Declarer`: DD score for the actual declarer
@@ -3275,7 +3091,7 @@ def add_dd_scores_contract_dependent(df: pl.DataFrame) -> pl.DataFrame:
                        for strain in 'CDHSN'  
                        for direction in 'NESW']
     
-    # Create DD_Score_Declarer by selecting the DD_Score_[1-7][CDHSN]_[NESW] column for the given Declarer_Direction
+    # Create DD_Score_Declarer by selecting the DD_Score_[1-7][CDHSN]_[NESW] column for the given level, strain, and Declarer_Direction
     df = df.with_columns([
         pl.struct(['BidLvl', 'BidSuit', 'Declarer_Direction'] + dd_score_columns)
         .map_elements(
@@ -3284,6 +3100,41 @@ def add_dd_scores_contract_dependent(df: pl.DataFrame) -> pl.DataFrame:
         )
         .alias('DD_Score_Declarer')
     ])
+
+    # Create list of column names of declarer: DD_Score_[CDHSN]_[NESW]_Max
+    dd_score_columns_max = [f"DD_Score_{strain}_{direction}_Max" 
+                       for strain in 'CDHSN'  
+                       for direction in 'NESW']
+    
+    # Create DD_Score_Max_Declarer by selecting the DD_Score_[CDHSN]_[NESW]_Max column for the given strain and declarer direction
+    df = df.with_columns([
+        pl.struct(['BidSuit', 'Declarer_Direction'] + dd_score_columns_max)
+        .map_elements(
+            lambda r: None if r['Declarer_Direction'] is None else r[f"DD_Score_{r['BidSuit']}_{r['Declarer_Direction']}_Max"],
+            return_dtype=pl.Int16
+        )
+        .alias('DD_Score_Max_Declarer')
+    ])    
+
+    # todo:? this is all wrong. probably should be the maximum score that the defenders could have achieved if they had made a further bid.
+    # # Create list of column names of defender: DD_Score_[CDHSN]_[NESW]_Max
+    # dd_score_columns_defender_max = [f"DD_Score_{strain}_{pair_direction}_Max" 
+    #                    for strain in 'CDHSN'  
+    #                    for pair_direction in ['NS','EW']]
+    
+    # # Create DD_Score_Max_Defender by finding the maximum score the defending pair could achieve in ANY strain
+    # # This represents the best contract the defenders could have declared if they had won the auction
+    # df = df.with_columns([
+    #     pl.struct(['Declarer_Direction'] + dd_score_columns_defender_max)
+    #     .map_elements(
+    #         lambda r: None if r['Declarer_Direction'] is None else max([
+    #             r[f"DD_Score_{strain}_{PairDirectionToOpponentPairDirection[PlayerDirectionToPairDirection[r['Declarer_Direction']]]}_Max"] 
+    #             for strain in 'CDHSN'
+    #         ]),
+    #         return_dtype=pl.Int16
+    #     )
+    #     .alias('DD_Score_Max_Defender')
+    # ])
 
     # Create DD_Score_NS and DD_Score_EW columns
     df = df.with_columns([
@@ -3786,8 +3637,6 @@ def compute_player_matchpoint_elo_ratings(
         if cols:
             df_sorted = df_sorted.drop(cols)
     return df_sorted.hstack(out_df)
-
-
 def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame:
     """Add constant per-session Elo columns for each seat and pair.
 
@@ -4127,7 +3976,7 @@ def build_vulnerability_conditions() -> Dict[str, pl.Expr]:
     }
 
 
-def build_ev_expressions_for_pair(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
+def build_ev_expressions_for_pair(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> list[pl.Expr]:
     """Build expected value expressions for a pair considering vulnerability.
 
     Purpose:
@@ -4140,7 +3989,7 @@ def build_ev_expressions_for_pair(pd: str, get_vulnerability_conditions: Dict[st
     - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
 
     Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional EV
+    - list[pl.Expr]: List of Polars expressions for vulnerability-conditional EV
 
     Input columns:
     - 'EV_{pd}_V_Max': Maximum vulnerable EV for the pair
@@ -4158,7 +4007,7 @@ def build_ev_expressions_for_pair(pd: str, get_vulnerability_conditions: Dict[st
     ]
 
 
-def build_ev_expressions_for_declarer(pd: str, dd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
+def build_ev_expressions_for_declarer(pd: str, dd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> list[pl.Expr]:
     """Build expected value expressions for specific declarer position considering vulnerability.
 
     Purpose:
@@ -4172,7 +4021,7 @@ def build_ev_expressions_for_declarer(pd: str, dd: str, get_vulnerability_condit
     - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
 
     Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional declarer EV
+    - list[pl.Expr]: List of Polars expressions for vulnerability-conditional declarer EV
 
     Input columns:
     - 'EV_{pd}_{dd}_V_Max': Maximum vulnerable EV for specific declarer
@@ -4190,7 +4039,7 @@ def build_ev_expressions_for_declarer(pd: str, dd: str, get_vulnerability_condit
     ]
 
 
-def build_ev_expressions_for_strain(pd: str, dd: str, s: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
+def build_ev_expressions_for_strain(pd: str, dd: str, s: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> list[pl.Expr]:
     """Build expected value expressions for specific strain considering vulnerability.
 
     Purpose:
@@ -4205,7 +4054,7 @@ def build_ev_expressions_for_strain(pd: str, dd: str, s: str, get_vulnerability_
     - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
 
     Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional strain EV
+    - list[pl.Expr]: List of Polars expressions for vulnerability-conditional strain EV
 
     Input columns:
     - 'EV_{pd}_{dd}_{s}_V_Max': Maximum vulnerable EV for specific strain
@@ -4223,7 +4072,7 @@ def build_ev_expressions_for_strain(pd: str, dd: str, s: str, get_vulnerability_
     ]
 
 
-def build_ev_expressions_for_level(pd: str, dd: str, s: str, l: int, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
+def build_ev_expressions_for_level(pd: str, dd: str, s: str, l: int, get_vulnerability_conditions: Dict[str, pl.Expr]) -> list[pl.Expr]:
     """Build expected value expressions for specific contract level considering vulnerability.
 
     Purpose:
@@ -4239,7 +4088,7 @@ def build_ev_expressions_for_level(pd: str, dd: str, s: str, l: int, get_vulnera
     - get_vulnerability_conditions: Dictionary mapping pairs to vulnerability expressions
 
     Returns:
-    - List[pl.Expr]: List of Polars expressions for vulnerability-conditional level EV
+    - list[pl.Expr]: List of Polars expressions for vulnerability-conditional level EV
 
     Input columns:
     - 'EV_{pd}_{dd}_{s}_{l}_V': Vulnerable EV for specific contract level
@@ -4253,8 +4102,8 @@ def build_ev_expressions_for_level(pd: str, dd: str, s: str, l: int, get_vulnera
     ]
 
 
-def build_pair_ev_expressions(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> List[pl.Expr]:
-    expressions: List[pl.Expr] = []
+def build_pair_ev_expressions(pd: str, get_vulnerability_conditions: Dict[str, pl.Expr]) -> list[pl.Expr]:
+    expressions: list[pl.Expr] = []
     expressions.extend(build_ev_expressions_for_pair(pd, get_vulnerability_conditions))
     for dd in pd:
         expressions.extend(build_ev_expressions_for_declarer(pd, dd, get_vulnerability_conditions))
@@ -4293,7 +4142,7 @@ def add_best_contract_ev(df: pl.DataFrame) -> pl.DataFrame:
     - DataFrame with added expected value summary and identification columns
     """
     vul = build_vulnerability_conditions()
-    max_expressions: List[pl.Expr] = []
+    max_expressions: list[pl.Expr] = []
     for pd in ['NS', 'EW']:
         max_expressions.extend(build_pair_ev_expressions(pd, vul))
     # TODO(polars): Consider switching to a LazyFrame here if this is part of a larger
@@ -4308,92 +4157,6 @@ def add_best_contract_ev(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns([
         pl.when(pl.col('Declarer_Pair_Direction').eq('NS')).then(pl.col('EV_Max_NS')).otherwise(pl.col('EV_Max_EW')).alias('EV_Max_Declarer'),
         pl.when(pl.col('Declarer_Pair_Direction').eq('NS')).then(pl.col('EV_Max_Col_NS')).otherwise(pl.col('EV_Max_Col_EW')).alias('EV_Max_Col_Declarer'),
-    ])
-    return out
-
-
-def add_score_calculations(df: pl.DataFrame) -> pl.DataFrame:
-    """Ensure `Score`, `Score_NS`, `Score_EW` exist using contract parts or existing scores.
-
-    Purpose:
-    - Create consistent scoring columns from available contract information
-    - Bridge different data sources that may have different score column formats
-    - Calculate scores from scratch if only contract components are available
-    - Normalize scoring data for consistent analysis across all data sources
-
-    Parameters:
-    - df: DataFrame containing contract and/or scoring information
-
-    Input columns:
-    - Either `Score_NS`/`Score_EW` and `Declarer_Pair_Direction`, or
-      `BidLvl`, `BidSuit`, `Tricks`, `Vul_Declarer`, `Dbl`.
-
-    Output columns:
-    - `Score`: General score column for declarer's perspective (pl.Int32)
-    - `Score_NS`: North-South partnership score (pl.Int32)
-    - `Score_EW`: East-West partnership score (pl.Int32)
-
-    Returns:
-    - DataFrame with added/normalized score columns
-    """
-    out = df
-    if 'Score' not in out.columns:
-        if 'Score_NS' in out.columns:
-            assert 'Score_EW' in out.columns, "Score_EW does not exist but Score_NS does."
-            out = out.with_columns([
-                pl.when(pl.col('Declarer_Pair_Direction').eq('NS')).then(pl.col('Score_NS')).otherwise(pl.col('Score_EW')).alias('Score')
-            ])
-        else:
-            all_scores_d, _, _ = precompute_contract_score_tables()
-            out = out.with_columns([
-                pl.struct(['BidLvl', 'BidSuit', 'Tricks', 'Vul_Declarer', 'Dbl'])
-                  .map_elements(lambda x: all_scores_d.get(tuple(x.values()), None), return_dtype=pl.Int16)
-                  .alias('Score')
-            ])
-    if 'Score_NS' not in out.columns:
-        out = out.with_columns([
-            pl.when(pl.col('Declarer_Pair_Direction').eq('NS')).then(pl.col('Score')).otherwise(-pl.col('Score')).alias('Score_NS'),
-            pl.when(pl.col('Declarer_Pair_Direction').eq('EW')).then(pl.col('Score')).otherwise(-pl.col('Score')).alias('Score_EW'),
-        ])
-    return out
-
-
-def add_score_differences(df: pl.DataFrame) -> pl.DataFrame:
-    """Create difference columns vs Par and EV, plus `DD_Tricks_Diff`.
-
-    Purpose:
-    - Calculate performance gaps between actual results and optimal theoretical outcomes
-    - Measure score differences against par results and maximum expected values
-    - Generate trick-taking performance metrics comparing actual vs predicted
-    - Support detailed analysis of bidding and play effectiveness
-
-    Parameters:
-    - df: DataFrame containing actual scores, par scores, and expected values
-
-    Input columns:
-    - `Score_NS`, `Score_EW`: Actual partnership scores achieved
-    - `Par_NS`, `Par_EW`: Theoretical par scores for optimal play
-    - `EV_Max_NS`, `EV_Max_EW`: Maximum expected value scores  
-    - `Tricks`: Actual tricks taken by declarer
-    - `DD_Tricks`: Double-dummy predicted tricks for declarer
-
-    Output columns:
-    - `Par_Diff_NS`, `Par_Diff_EW`: Score difference vs par (pl.Int16)
-    - `DD_Tricks_Diff`: Trick difference vs double-dummy prediction (pl.Int8)
-    - `EV_Max_Diff_NS`, `EV_Max_Diff_EW`: Score difference vs maximum EV (pl.Int16)
-
-    Returns:
-    - DataFrame with added performance difference columns
-    """
-    out = df.with_columns([
-        pl.Series('Par_Diff_NS', (df['Score_NS'] - df['Par_NS']), pl.Int16),
-        pl.Series('Par_Diff_EW', (df['Score_EW'] - df['Par_EW']), pl.Int16),
-        pl.Series('DD_Tricks_Diff', (df['Tricks'].cast(pl.Int8) - df['DD_Tricks'].cast(pl.Int8)), pl.Int8, strict=False),
-        pl.Series('EV_Max_Diff_NS', df['Score_NS'] - df['EV_Max_NS'], pl.Float32),
-        pl.Series('EV_Max_Diff_EW', df['Score_EW'] - df['EV_Max_EW'], pl.Float32),
-    ])
-    out = out.with_columns([
-        pl.Series('Par_Diff_EW', -out['Par_Diff_NS'], pl.Int16)
     ])
     return out
 
@@ -4447,6 +4210,15 @@ def add_position_role_info(df: pl.DataFrame) -> pl.DataFrame:
             ).alias('Score_Declarer'),
             pl.when(pl.col('Declarer_Pair_Direction').eq(pl.lit('NS'))).then(pl.col('Par_NS')).otherwise(pl.col('Par_EW')).alias('Par_Declarer'),
         ])
+        # Add columns for par achievements
+        # Is_Par_Suit: True when the declarer achieved par for the best suit
+        # Is_Par_Contract: True when the declarer achieved par for their actual contract
+        # Is_Sacrifice: True when the declarer achieved par for their actual contract
+        .with_columns([
+            pl.col('Par_Declarer').eq(pl.col('DD_Score_Max_Declarer')).alias('Is_Par_Suit'),
+            pl.col('Par_Declarer').eq(pl.col('DD_Score_Declarer')).alias('Is_Par_Contract'),
+            (pl.col('Par_Declarer').eq(pl.col('DD_Score_Declarer')) & pl.col('DD_Score_Declarer').lt(0)).alias('Is_Sacrifice')
+        ])
         .with_columns([
             pl.col('Declarer_Pair_Direction').replace_strict(PairDirectionToOpponentPairDirection).alias('Defender_Pair_Direction'),
             pl.col('Direction_OnLead').replace_strict(NextPosition).alias('Direction_Dummy'),
@@ -4467,8 +4239,6 @@ def add_position_role_info(df: pl.DataFrame) -> pl.DataFrame:
             ).alias('NotOnLead')
         ])
     )
-
-
 def add_trick_probabilities(df: pl.DataFrame) -> pl.DataFrame:
     """Create Prob_Taking_0..13 columns by selecting the probability matching the declarer context.
 
@@ -4500,7 +4270,7 @@ def add_trick_probabilities(df: pl.DataFrame) -> pl.DataFrame:
     existing_prob_cols = {col for col in df.columns if col.startswith('Probs_')}
 
     def build_prob_expr(current_t: int) -> pl.Expr:
-        terms: List[pl.Expr] = []
+        terms: list[pl.Expr] = []
         for pair, decl in pd_pairs:
             for s in suits:
                 prob_col = f"Probs_{pair}_{decl}_{s}_{current_t}"
@@ -4624,32 +4394,13 @@ def add_player_ratings(df: pl.DataFrame) -> pl.DataFrame:
     - DataFrame with added player rating columns
     """
     return df.with_columns([
-        pl.col('DD_Tricks_Diff').mean().over('Declarer_ID').alias('Declarer_Rating'),
+        pl.col('DD_Tricks_Diff').cast(pl.Float32).mean().over('Declarer_ID').alias('Declarer_Rating'),
         pl.col('Defender_Par_GE').cast(pl.Float32).mean().over('OnLead').alias('Defender_OnLead_Rating'),
         pl.col('Defender_Par_GE').cast(pl.Float32).mean().over('NotOnLead').alias('Defender_NotOnLead_Rating'),
     ])
 
 
-def compute_group_matchpoints(series_list: List[pl.Series]) -> pl.Series:
-    """Compute matchpoints for a vector vs a reference score vector.
-
-    Parameters:
-    - series_list: [values_series, score_ns_series].
-
-    Returns:
-    - Series of matchpoint totals per row.
-    """
-    col_values = series_list[0]
-    score_ns_values = series_list[1]
-    score_ns_values = score_ns_values.fill_null(0.0)
-    col_values = col_values.fill_null(0.0)
-    return pl.Series([
-        sum(1.0 if val > score else 0.5 if val == score else 0.0 for score in score_ns_values)
-        for val in col_values
-    ])
-
-
-def compute_matchpoints_for_scores(df: pl.DataFrame, score_columns: List[str]) -> pl.DataFrame:
+def compute_matchpoints_for_scores(df: pl.DataFrame, score_columns: list[str]) -> pl.DataFrame:
     """Compute matchpoints for a set of score columns in batches.
 
     Purpose:
@@ -4711,7 +4462,7 @@ def compute_matchpoints_for_scores(df: pl.DataFrame, score_columns: List[str]) -
     return out
 
 
-def compute_matchpoints(df: pl.DataFrame, all_score_columns: List[str], batch_size: int = 50) -> pl.DataFrame:
+def compute_matchpoints(df: pl.DataFrame, all_score_columns: list[str], batch_size: int = 50) -> pl.DataFrame:
     """Compute matchpoints for score columns with batching plus declarer and max sets.
 
     Purpose:
@@ -5127,8 +4878,6 @@ def compute_score_differences(df: pl.DataFrame) -> pl.DataFrame:
         (pl.coalesce([pl.col('DD_Pct_Max_NS').cast(pl.Float32), zero]) - pl.coalesce([pl.col('EV_Pct_Max_NS').cast(pl.Float32), zero])).alias('DD_EV_Pct_Max_Diff_NS'),
         (pl.coalesce([pl.col('DD_Pct_Max_EW').cast(pl.Float32), zero]) - pl.coalesce([pl.col('EV_Pct_Max_EW').cast(pl.Float32), zero])).alias('DD_EV_Pct_Max_Diff_EW'),
     ])
-
-
 def add_event_elo_ratings(df: pl.DataFrame) -> pl.DataFrame:
     """Deprecated: use `compute_event_start_end_elo_columns` directly.
 
@@ -5768,8 +5517,6 @@ def compute_group_matchpoints(series_list: list[pl.Series]) -> pl.Series:
             for score in score_ns_values)
         for val in col_values
     ])
-
-
 def compute_all_score_matchpoints(df: pl.DataFrame, all_score_columns: list[str]) -> pl.DataFrame:
     """Calculate matchpoints for all score columns in batches to prevent memory issues.
 
@@ -6197,8 +5944,6 @@ class FinalContractAugmenter:
 
         logger.info(f"Final contract augmentations complete: {time.time() - t_start:.2f} seconds")
         return self.df
-
-
 class MatchPointAugmenter:
     def __init__(self, df: pl.DataFrame, incorporate_elo_ratings: bool = False):
         self.df = df
@@ -6215,11 +5960,9 @@ class MatchPointAugmenter:
         return result
 
     def _compute_matchpoint_top(self) -> None:
-        # Assert required columns exist
-        assert 'Score' in self.df.columns, "Required column 'Score' not found in DataFrame"
-        assert 'session_id' in self.df.columns, "Required column 'session_id' not found in DataFrame"
-        assert 'PBN' in self.df.columns, "Required column 'PBN' not found in DataFrame"
-        assert 'Board' in self.df.columns, "Required column 'Board' not found in DataFrame"
+        # Assert required columns exist (add_board_matchpoint_top only needs MP_NS and MP_EW)
+        assert 'MP_NS' in self.df.columns, "Required column 'MP_NS' not found in DataFrame"
+        assert 'MP_EW' in self.df.columns, "Required column 'MP_EW' not found in DataFrame"
         
         if 'MP_Top' not in self.df.columns:
             self.df = self._time_operation("create MP_Top", add_board_matchpoint_top, self.df)
@@ -6231,11 +5974,11 @@ class MatchPointAugmenter:
         # Assert required columns exist
         assert 'Score_NS' in self.df.columns, "Required column 'Score_NS' not found in DataFrame"
         assert 'Score_EW' in self.df.columns, "Required column 'Score_EW' not found in DataFrame"
-        assert 'session_id' in self.df.columns, "Required column 'session_id' not found in DataFrame"
-        assert 'PBN' in self.df.columns, "Required column 'PBN' not found in DataFrame"
-        assert 'Board' in self.df.columns, "Required column 'Board' not found in DataFrame"
         
-        if 'MP_NS' not in self.df.columns:
+        # If MP columns are missing, we must compute them and need grouping keys
+        if 'MP_NS' not in self.df.columns or 'MP_EW' not in self.df.columns:
+            assert 'session_id' in self.df.columns, "Required column 'session_id' not found in DataFrame"
+            assert 'Board' in self.df.columns, "Required column 'Board' not found in DataFrame"
             self.df = self._time_operation("calculate matchpoints MP_(NS|EW)", add_matchpoint_scores_from_raw, self.df)
         
         # Assert columns were created

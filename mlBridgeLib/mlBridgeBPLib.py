@@ -429,14 +429,32 @@ async def parse_route_html_async(page) -> List[Dict]:
         pair_pattern = r'([A-Z\s\-]+)\s*\(([NESWO]+)(\d+)\s*([A-Z])\)'
         pair_matches = re.findall(pair_pattern, page_text)
         
-        # Extract event name from HTML div with specific class
-        event_div = await page.query_selector('div.col.p-0.h4')
-        if not event_div:
-            raise ValueError("Could not find event name div with class 'col.p-0.h4'")
+        # Extract event name from page text using regex patterns
+        event_name = "Unknown Event"
         
-        event_name = await event_div.text_content()
-        event_name = event_name.strip()
-        logger.info(f"Extracted event name from HTML div: {event_name}")
+        # Try multiple regex patterns to extract event name
+        event_patterns = [
+            r'Simultané du ([^n]+n°\d+)',  # "Simultané du Roy René n°17"
+        ]
+        
+        for pattern in event_patterns:
+            event_match = re.search(pattern, page_text)
+            if event_match:
+                if 'du' in pattern:
+                    event_name = f"Simultané du {event_match.group(1)}"
+                else:
+                    event_name = f"Simultané {event_match.group(1)}"
+                logger.info(f"Extracted event name from page text using pattern '{pattern}': {event_name}")
+                break
+        else:
+            # Fallback: try to find any tournament-like text
+            tournament_match = re.search(r'([A-Za-z\s]+n°\d+)', page_text)
+            if tournament_match:
+                event_name = tournament_match.group(1).strip()
+                logger.info(f"Extracted fallback event name: {event_name}")
+            else:
+                logger.warning("Could not extract event name from page text, using default")
+                event_name = "Bridge Tournament"
         
         # Extract Tournament_ID and Team_ID from URL parameters
         tournament_id = 'Unknown'
@@ -692,8 +710,37 @@ async def parse_teams_html_async(page) -> List[Dict]:
         logger.info("Parsing BridgePlus teams page using corrected HTML structure...")
 
         # --- Extract page-level information ---
-        event_name_div = await page.query_selector('div.col.p-0.h4')
-        event_name = (await event_name_div.text_content()).strip() if event_name_div else 'Unknown'
+        # Get page text for regex extraction
+        page_text = await page.text_content('body')
+        
+        # Extract event name from page text using regex patterns
+        event_name = "Unknown Event"
+        event_patterns = [
+            r'Simultané du ([^n]+n°\d+)',  # "Simultané du Roy René n°17"
+            r'Simultané ([^n]+n°\d+)',    # Alternative without "du"
+            r'(Roy René n°\d+)',          # Just "Roy René n°17"
+            r'Simultané du (.+)',         # Any text after "Simultané du"
+            r'Simultané (.+)',            # Any text after "Simultané"
+        ]
+        
+        for pattern in event_patterns:
+            event_match = re.search(pattern, page_text)
+            if event_match:
+                if 'du' in pattern:
+                    event_name = f"Simultané du {event_match.group(1)}"
+                else:
+                    event_name = f"Simultané {event_match.group(1)}"
+                logger.info(f"Extracted event name from page text using pattern '{pattern}': {event_name}")
+                break
+        else:
+            # Fallback: try to find any tournament-like text
+            tournament_match = re.search(r'([A-Za-z\s]+n°\d+)', page_text)
+            if tournament_match:
+                event_name = tournament_match.group(1).strip()
+                logger.info(f"Extracted fallback event name: {event_name}")
+            else:
+                logger.warning("Could not extract event name from page text, using default")
+                event_name = "Bridge Tournament"
 
         date_div = await page.query_selector('div.col-4.p-0.text-left.h5')
         date = (await date_div.text_content()).strip() if date_div else 'Unknown'

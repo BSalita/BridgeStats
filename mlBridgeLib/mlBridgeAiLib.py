@@ -732,9 +732,9 @@ def build_regression_mlp(input_dim: int, layers: List[int], dropout: float = 0.2
                     blocks.append(torch.nn.Dropout(dropout))
                 prev = w
             blocks.append(torch.nn.Linear(prev, 1))
-            self.net = torch.nn.Sequential(*blocks)
+            self.layers = torch.nn.Sequential(*blocks)
         def forward(self, x):
-            return self.net(x).squeeze(-1)
+            return self.layers(x).squeeze(-1)
     return MLP(input_dim, layers, dropout)
 
 
@@ -751,9 +751,9 @@ def build_classifier_mlp(input_dim: int, num_classes: int, layers: List[int], dr
                     blocks.append(torch.nn.Dropout(dropout))
                 prev = w
             blocks.append(torch.nn.Linear(prev, num_classes))
-            self.net = torch.nn.Sequential(*blocks)
+            self.layers = torch.nn.Sequential(*blocks)
         def forward(self, x):
-            return self.net(x)
+            return self.layers(x)
     return Classifier(input_dim, layers, dropout, num_classes)
 
 
@@ -801,7 +801,7 @@ class MLP(torch.nn.Module):
 
         # Output layer (no activation - raw logits for regression)
         layers.append(torch.nn.Linear(prev_size, 1))
-        self.net = torch.nn.Sequential(*layers)
+        self.layers = torch.nn.Sequential(*layers)
 
     def forward(self, x_cont, x_cat=None):
         # Process categorical features through embeddings if they exist
@@ -813,7 +813,7 @@ class MLP(torch.nn.Module):
         else:
             x = x_cont # No categorical features or no embeddings defined
 
-        return self.net(x).squeeze(-1)  # Remove last dimension for scalar output
+        return self.layers(x).squeeze(-1)  # Remove last dimension for scalar output
 
 
 def compute_scaling_parameters(df: pl.DataFrame, apply_scaling: bool = True, verbose: bool = True) -> Dict[str, Dict[str, float]]:
@@ -899,6 +899,230 @@ def apply_feature_scaling(
         scaled_data[:, idx] = (scaled_data[:, idx] - mean) / std
     return scaled_data
 
+
+def validate_dataframe_dtypes(
+    df: pl.DataFrame,
+    expected_dtypes: Dict[str, str],
+    context: str = "DataFrame",
+    strict: bool = True
+) -> pl.DataFrame:
+    """
+    Validate that DataFrame columns have the expected dtypes.
+    
+    Args:
+        df: Input DataFrame to validate
+        expected_dtypes: Dict mapping column names to expected dtype strings
+        context: Description for error messages (e.g., "training", "inference")
+        strict: If True, raise errors on mismatches. If False, attempt conversion.
+        
+    Returns:
+        DataFrame with validated/converted dtypes
+        
+    Raises:
+        ValueError: If strict=True and dtypes don't match
+    """
+    df_schema = dict(df.schema)
+    mismatches = []
+    conversions_needed = []
+    
+    for col, expected_dtype_str in expected_dtypes.items():
+        if col not in df_schema:
+            continue  # Missing columns handled elsewhere
+            
+        actual_dtype = df_schema[col]
+        actual_dtype_str = str(actual_dtype)
+        
+        if actual_dtype_str != expected_dtype_str:
+            mismatches.append(f"  {col}: expected {expected_dtype_str}, got {actual_dtype_str}")
+            conversions_needed.append((col, expected_dtype_str, actual_dtype_str))
+    
+    if mismatches:
+        error_msg = f"Dtype mismatches in {context}:\n" + "\n".join(mismatches)
+        
+        if strict:
+            raise ValueError(error_msg)
+        else:
+            print(f"⚠️  {error_msg}")
+            print(f"🔧 Attempting dtype conversions...")
+            
+            # Attempt conversions
+            df_converted = df
+            for col, expected_dtype_str, actual_dtype_str in conversions_needed:
+                try:
+                    # Map string dtype names to Polars dtypes
+                    dtype_map = {
+                        'Float32': pl.Float32,
+                        'Float64': pl.Float64,
+                        'Int8': pl.Int8,
+                        'Int16': pl.Int16,
+                        'Int32': pl.Int32,
+                        'Int64': pl.Int64,
+                        'UInt8': pl.UInt8,
+                        'UInt16': pl.UInt16,
+                        'UInt32': pl.UInt32,
+                        'UInt64': pl.UInt64,
+                        'Boolean': pl.Boolean,
+                        'String': pl.String,
+                        'Utf8': pl.Utf8,
+                        'Categorical': pl.Categorical,
+                        'Date': pl.Date,
+                        'Datetime': pl.Datetime,
+                    }
+                    
+                    target_dtype = dtype_map.get(expected_dtype_str)
+                    if target_dtype:
+                        df_converted = df_converted.with_columns(
+                            pl.col(col).cast(target_dtype)
+                        )
+                        print(f"  ✅ Converted {col}: {actual_dtype_str} → {expected_dtype_str}")
+                    else:
+                        print(f"  ❌ Unknown target dtype {expected_dtype_str} for {col}")
+                        
+                except Exception as e:
+                    print(f"  ❌ Failed to convert {col}: {e}")
+                    if strict:
+                        raise ValueError(f"Failed to convert {col} from {actual_dtype_str} to {expected_dtype_str}: {e}")
+            
+            return df_converted
+    
+    return df
+
+
+def validate_training_dataframe_dtypes(
+    df: pl.DataFrame,
+    feature_columns: List[str],
+    target_column: str,
+    verbose: bool = False
+) -> pl.DataFrame:
+    """
+    Validate that training DataFrame has appropriate dtypes for ML training.
+    
+    Args:
+        df: Training DataFrame
+        feature_columns: List of feature column names
+        target_column: Name of target column
+        verbose: Print validation details
+        
+    Returns:
+        DataFrame with validated dtypes
+        
+    Raises:
+        ValueError: If critical dtype issues are found
+    """
+    if verbose:
+        print(f"🔍 Validating dtypes for {len(feature_columns)} features + 1 target...")
+    
+    df_schema = dict(df.schema)
+    issues = []
+    
+    # Check feature columns
+    for col in feature_columns:
+        if col not in df_schema:
+            issues.append(f"Missing feature column: {col}")
+            continue
+            
+        dtype = df_schema[col]
+        dtype_str = str(dtype)
+        
+        # Features should be numeric, boolean, categorical, or string (for categoricals)
+        if not any(t in dtype_str for t in ['Float', 'Int', 'UInt', 'Boolean', 'Categorical', 'String', 'Utf8', 'Date']):
+            issues.append(f"Feature {col} has unsupported dtype: {dtype_str}")
+    
+    # Check target column
+    if target_column not in df_schema:
+        issues.append(f"Missing target column: {target_column}")
+    else:
+        target_dtype_str = str(df_schema[target_column])
+        if verbose:
+            print(f"  Target column '{target_column}': {target_dtype_str}")
+    
+    if issues:
+        raise ValueError(f"Training DataFrame validation failed:\n" + "\n".join(f"  - {issue}" for issue in issues))
+    
+    if verbose:
+        print(f"✅ Training DataFrame dtype validation passed")
+    
+    return df
+
+
+def validate_inference_dataframe_dtypes(
+    df: pl.DataFrame,
+    schema: Dict[str, Any],
+    strict: bool = True,
+    verbose: bool = False
+) -> pl.DataFrame:
+    """
+    Validate that inference DataFrame dtypes match the training schema.
+    
+    Args:
+        df: Inference DataFrame
+        schema: Training schema with feature_dtypes
+        strict: If True, raise errors on mismatches and missing columns
+        verbose: Print validation details
+        
+    Returns:
+        DataFrame with validated dtypes
+        
+    Raises:
+        ValueError: If required columns are missing or dtypes don't match (strict mode)
+    """
+    feature_dtypes = schema.get('feature_dtypes', {})
+    if not feature_dtypes:
+        if verbose:
+            print("[WARNING] No feature_dtypes in schema, skipping dtype validation")
+        return df
+    
+    if verbose:
+        print(f"[DEBUG] Validating inference dtypes against schema (strict={strict})...")
+    
+    # Check for missing columns
+    df_columns = set(df.columns)
+    schema_columns = set(feature_dtypes.keys())
+    missing_in_df = schema_columns - df_columns
+    extra_in_df = df_columns - schema_columns
+    
+    if verbose:
+        print(f"  Schema expects {len(schema_columns)} feature columns")
+        print(f"  DataFrame has {len(df_columns)} columns")
+        if missing_in_df:
+            print(f"  ERROR: Missing columns: {len(missing_in_df)}")
+        if extra_in_df:
+            print(f"  WARNING: Extra columns: {len(extra_in_df)}")
+    
+    # Handle missing columns
+    if missing_in_df:
+        missing_list = sorted(list(missing_in_df))
+        error_msg = f"Required feature columns missing from inference DataFrame:\n"
+        error_msg += "\n".join(f"  - {col} (expected dtype: {feature_dtypes[col]})" for col in missing_list[:10])
+        if len(missing_list) > 10:
+            error_msg += f"\n  ... and {len(missing_list) - 10} more columns"
+        
+        if strict:
+            raise ValueError(error_msg)
+        else:
+            print(f"⚠️  {error_msg}")
+            print("🔧 Continuing with available columns only...")
+    
+    # Validate dtypes for available columns
+    common_columns = df_columns & schema_columns
+    if verbose:
+        print(f"  Validating dtypes for {len(common_columns)} available columns")
+    
+    expected_dtypes = {col: feature_dtypes[col] for col in common_columns}
+    
+    # Validate dtypes
+    validated_df = validate_dataframe_dtypes(
+        df, expected_dtypes, context="inference data", strict=strict
+    )
+    
+    if verbose:
+        print(f"[OK] Inference DataFrame validation completed")
+        if missing_in_df and not strict:
+            print(f"  [WARNING] Note: {len(missing_in_df)} columns were missing but validation continued")
+    
+    return validated_df
+
+
 # gpt-5 says: Shared helpers to deduplicate tensor construction across DF/shards/inference.
 def build_continuous_tensor(
     df: pl.DataFrame,
@@ -950,6 +1174,71 @@ def build_continuous_tensor(
     return torch.tensor(X_num, dtype=torch.float32)
 
 
+def validate_categorical_schemas(
+    df: pl.DataFrame,
+    categorical_feature_cols: List[str],
+    category_mappings: Dict[str, Dict[Any, int]]
+) -> None:
+    """
+    Validate that inference data categorical schemas match training schemas exactly.
+    
+    This ensures that:
+    1. All categorical columns exist in the inference data
+    2. All categories in inference data were seen during training
+    3. Training and inference use the same categorical value sets
+    
+    Raises ValueError if any mismatches are found.
+    """
+    try:
+        # Import training schemas for comparison
+        import sys
+        import pathlib
+        sys.path.append(str(pathlib.Path(__file__).parent))
+        from mlBridgeLib import CATEGORICAL_SCHEMAS
+        
+        for col in categorical_feature_cols:
+            if col not in df.columns:
+                raise ValueError(f"Categorical column '{col}' not found in inference data")
+            
+            # Get training schema for this column
+            if col not in CATEGORICAL_SCHEMAS:
+                raise ValueError(f"No training schema found for categorical column '{col}'")
+            
+            training_categories = set(CATEGORICAL_SCHEMAS[col].categories)
+            schema_categories = set(category_mappings.get(col, {}).keys())
+            
+            # Check schema matches training
+            if schema_categories != training_categories:
+                missing_in_schema = training_categories - schema_categories
+                extra_in_schema = schema_categories - training_categories
+                error_msg = f"Schema mismatch for column '{col}':"
+                if missing_in_schema:
+                    error_msg += f" Missing from schema: {sorted(missing_in_schema)}."
+                if extra_in_schema:
+                    error_msg += f" Extra in schema: {sorted(extra_in_schema)}."
+                raise ValueError(error_msg)
+            
+            # Get inference data categories (excluding nulls)
+            col_data = df.select(col).to_series()
+            
+            # Get unique values, excluding nulls
+            unique_values = col_data.unique().to_list()
+            inference_categories = set(str(v) for v in unique_values if v is not None)
+            
+            # Check inference data only contains training categories
+            unknown_categories = inference_categories - training_categories
+            if unknown_categories:
+                raise ValueError(
+                    f"Unknown categories in inference data for column '{col}': {sorted(unknown_categories)}. "
+                    f"Training categories: {sorted(training_categories)}. "
+                    f"This indicates the inference data contains values not seen during training."
+                )
+                
+    except ImportError:
+        # If we can't import training schemas, skip validation with warning
+        print("Warning: Could not import training categorical schemas for validation")
+
+
 def build_categorical_tensor(
     df: pl.DataFrame,
     categorical_feature_cols: List[str],
@@ -964,10 +1253,25 @@ def build_categorical_tensor(
     """
     if not categorical_feature_cols:
         return None
+    
+    # Validate that training and inference categorical schemas match (once per session)
+    if not hasattr(validate_categorical_schemas, '_validated_models'):
+        validate_categorical_schemas._validated_models = set()
+    
+    # Create a unique key for this model's categorical schema
+    schema_key = tuple(sorted(categorical_feature_cols)) + tuple(sorted(
+        (col, tuple(sorted(mapping.items()))) 
+        for col, mapping in category_mappings.items()
+    ))
+    
+    if schema_key not in validate_categorical_schemas._validated_models:
+        validate_categorical_schemas(df, categorical_feature_cols, category_mappings)
+        validate_categorical_schemas._validated_models.add(schema_key)
     cat_arrays = []
     for col in categorical_feature_cols:
         mapping = category_mappings.get(col, {})
-        unknown_idx = cat_feature_info.get(col, 0)
+        if not mapping:
+            raise ValueError(f"No categorical mapping found for column '{col}' in schema")
         
         # Ensure we get a proper Series, not an expression
         col_data = df.select(col).to_series()
@@ -975,20 +1279,34 @@ def build_categorical_tensor(
         
         # Handle String columns by converting to string first, then mapping
         if dtype_str in ['String', 'Utf8']:
-            # Ensure nulls are handled as strings
+            # Convert nulls to string representation for checking
             col_data = col_data.fill_null("__NULL__")
         
+        # Check for unknown categories before mapping
+        unique_values = set(str(v) for v in col_data.unique().to_list() if v is not None)
+        known_categories = set(mapping.keys())
+        unknown_categories = unique_values - known_categories
+        
+        if unknown_categories:
+            raise ValueError(
+                f"Unknown categories found in column '{col}': {sorted(unknown_categories)}. "
+                f"Known categories from training: {sorted(known_categories)}. "
+                f"This indicates a mismatch between training and inference data."
+            )
+        
+        # Map categories to indices (no default since we've verified all are known)
         mapped = (
             col_data
-            .replace_strict(mapping, default=unknown_idx, return_dtype=pl.Int64)
-            .fill_null(unknown_idx)
+            .replace_strict(mapping, return_dtype=pl.Int64)
             .to_numpy()
             .astype(np.int64)
         )
         cat_arrays.append(mapped)
     if not cat_arrays:
         return None
-    return torch.tensor(np.stack(cat_arrays, axis=1), dtype=torch.int64)
+    
+    result = torch.tensor(np.stack(cat_arrays, axis=1), dtype=torch.int64)
+    return result
 
 
 def cat_dims_from_schema(schema: Dict[str, Any]) -> Optional[List[Tuple[int, int]]]:
@@ -1011,8 +1329,8 @@ def expected_input_dim_from_schema(schema: Dict[str, Any]) -> int:
 
 def build_model_from_schema(schema: Dict[str, Any], input_dim: int, device: torch.device) -> torch.nn.Module:
     """Construct MLP on device using schema settings and cat dims (if any)."""
-    mlp_layers = schema.get('mlp_layers', [1024, 512, 256, 128])
-    dropout = schema.get('mlp_dropout', 0.1)
+    mlp_layers = schema.get('mlp_layers', [512, 256, 128])
+    dropout = schema.get('mlp_dropout', 0.05)
     cat_dims = cat_dims_from_schema(schema)
     model = MLP(input_dim=input_dim, cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout)
     return model.to(device)
@@ -1093,7 +1411,7 @@ def generate_and_save_schema_core(
     apply_scaling_parameters: bool = True,
     verbose: bool = False,
     y_range: Optional[Tuple[float, float]] = (0.0, 1.0),
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
     blacklist_patterns: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1114,6 +1432,12 @@ def generate_and_save_schema_core(
     schema_map: Dict[str, Any] = dict(df.schema)
     cols = list(schema_map.keys())
     dtypes = schema_map  # map: column -> pl.DataType
+    
+    # Validate training DataFrame dtypes before processing
+    all_feature_cols_preliminary = [c for c in cols if c != y_name]
+    df = validate_training_dataframe_dtypes(
+        df, all_feature_cols_preliminary, y_name, verbose=verbose
+    )
     
     # Helpers to check Polars dtype kinds
     def _is_float_dtype(dt: Any) -> bool:
@@ -1164,27 +1488,6 @@ def generate_and_save_schema_core(
     date_cols = [c for c in all_feature_cols if _is_date_dtype(dtypes[c])]
     categorical_cols = [c for c in all_feature_cols if _is_categorical_dtype(dtypes[c])]
     
-    # For training compatibility, include target in appropriate type lists
-    all_float_cols = feature_float_cols.copy()
-    all_int_cols = feature_int_cols.copy()
-    all_bool_cols = bool_cols.copy()
-    all_string_cols = string_cols.copy()
-    all_date_cols = date_cols.copy()
-    all_categorical_cols = categorical_cols.copy()
-    
-    target_dtype = dtypes[y_name]
-    if _is_float_dtype(target_dtype):
-        all_float_cols.append(y_name)
-    elif _is_integer_dtype(target_dtype):
-        all_int_cols.append(y_name)
-    elif _is_boolean_dtype(target_dtype):
-        all_bool_cols.append(y_name)
-    elif _is_string_dtype(target_dtype):
-        all_string_cols.append(y_name)
-    elif _is_date_dtype(target_dtype):
-        all_date_cols.append(y_name)
-    elif _is_categorical_dtype(target_dtype):
-        all_categorical_cols.append(y_name)
     
     # Numerical features: Float + Int + Boolean (as 0/1) + Date (as timestamp) - FEATURES ONLY
     numerical_feature_cols = feature_float_cols + feature_int_cols + bool_cols + date_cols
@@ -1192,8 +1495,9 @@ def generate_and_save_schema_core(
     # Categorical features: String + existing Categorical - FEATURES ONLY
     categorical_feature_cols = string_cols + categorical_cols
     
-    # All features
-    feature_column_list = numerical_feature_cols + categorical_feature_cols
+    # Create feature_dtypes mapping for training features
+    all_feature_cols = numerical_feature_cols + categorical_feature_cols
+    feature_dtypes = {col: str(dtypes[col]) for col in all_feature_cols}
     
     if verbose:
         print(f"📊 Feature type breakdown:")
@@ -1203,7 +1507,8 @@ def generate_and_save_schema_core(
         print(f"  String: {len(string_cols)} columns")
         print(f"  Date: {len(date_cols)} columns")
         print(f"  Categorical: {len(categorical_cols)} columns")
-        print(f"  Total features: {len(feature_column_list)} columns")
+        print(f"  Total features: {len(all_feature_cols)} columns")
+        print(f"  Features with recorded dtypes: {len(feature_dtypes)}")
 
     # Compute scaling parameters using centralized function
     scaling_params = compute_scaling_parameters(
@@ -1237,8 +1542,8 @@ def generate_and_save_schema_core(
 
     schema = {
         "schema_version": schema_version,
-        "feature_column_list": feature_column_list,
         "target_column": y_name,
+        "feature_dtypes": feature_dtypes,
         "mlp_layers": layers,
         "mlp_dropout": dropout,
         "scaling_params": scaling_params,
@@ -1248,12 +1553,6 @@ def generate_and_save_schema_core(
         "numerical_feature_cols": numerical_feature_cols,
         "categorical_feature_cols": categorical_feature_cols,
         "model_type": inferred_model_type,
-        # For shard trainers and generic loaders - includes target column
-        "columns": {
-            "float32": all_float_cols,
-            "int32": all_int_cols,
-            "categorical": all_categorical_cols,
-        },
         "category_mappings": category_mappings,
     }
     # Persist basic provenance to the schema for downstream consumers
@@ -1273,59 +1572,39 @@ def generate_and_save_schema_core(
     return schema
 
 
-def infer_model_type(
-    saved_models_path: Optional[pathlib.Path] = None,
-    model_name: Optional[str] = None,
-    df: Optional[pl.DataFrame] = None,
-    y_name: Optional[str] = None,
-    schema: Optional[Dict[str, Any]] = None,
+def get_model_type_from_schema(
+    saved_models_path: pathlib.Path,
+    model_name: str,
 ) -> str:
-    """Return 'regression' or 'classification' using schema or y_name dtype.
+    """Return model type strictly from saved schema or checkpoint heuristics."""
+    sp = resolve_schema_path(saved_models_path, model_name)
+    if not sp.exists():
+        raise FileNotFoundError(f"Schema file not found: {sp}")
+    schema = json.load(open(sp))
+    mt = schema.get('model_type')
+    if isinstance(mt, str) and mt in ('regression', 'classification'):
+        return mt
+    raise ValueError("model_type cannot be inferred from schema; set schema['model_type']")
 
-    Priority:
-    1) schema.model_type if provided; else presence of class_to_idx => classification # todo: use dtype.is_float()
-    2) If df and y_name provided, dtype 'Float' => regression else classification # todo: use dtype.is_float()
-    Else raises ValueError.
-    """
-    # 1) Schema-based inference
-    if schema is None and saved_models_path is not None and model_name is not None:
-        sp = resolve_schema_path(saved_models_path, model_name)
-        if sp.exists():
-            try:
-                schema = json.load(open(sp))
-            except Exception:
-                schema = None
-    if schema is not None:
-        mt = schema.get('model_type')
-        if isinstance(mt, str) and mt in ('regression', 'classification'):
-            return mt
-        if 'class_to_idx' in schema:
-            return 'classification'
-        # Fall through if schema lacks explicit type
 
-    # 2) y dtype-based inference
-    if df is not None and y_name is not None:
-        if y_name not in df.columns:
-            # Provide a helpful error if the target column is missing
-            sample_cols = df.columns[:20]
-            raise ValueError(
-                f"y_name '{y_name}' not found in df columns. "
-                f"Columns count={len(df.columns)}; sample={sample_cols}. "
-                f"Ensure the target column is present before calling generate_and_save_schema."
-            )
-        dtype = df[y_name].dtype
-        # Align with schema_core: only Float targets are treated as regression;
-        # all other dtypes (Categorical, Utf8/String, Int, Bool, Enum, etc.)
-        # default to classification to avoid brittle dtype checks.
-        try:
-            if dtype.is_float():
-                return 'regression'
-        except Exception:
-            # If dtype doesn't expose is_float, fall through to classification
-            pass
-        return 'classification'
-
-    raise ValueError(f"model_type cannot be inferred as regression or classification")
+def infer_model_type_from_df(
+    df: pl.DataFrame,
+    y_name: str,
+) -> str:
+    """Infer model type from target dtype only (training-time)."""
+    if y_name not in df.columns:
+        sample_cols = df.columns[:20]
+        raise ValueError(
+            f"y_name '{y_name}' not found in df columns. "
+            f"Columns count={len(df.columns)}; sample={sample_cols}."
+        )
+    dtype = df[y_name].dtype
+    try:
+        if dtype.is_float():
+            return 'regression'
+    except Exception:
+        pass
+    return 'classification'
 
 
 def generate_and_save_schema(
@@ -1339,7 +1618,7 @@ def generate_and_save_schema(
     apply_scaling_parameters: bool = True,
     y_range: Optional[Tuple[float, float]] = (0.0, 1.0),
     # Schema generation parameters
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
     blacklist_patterns: Optional[List[str]] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
@@ -1357,7 +1636,7 @@ def generate_and_save_schema(
     - blacklist_patterns: Column exclusion patterns
     - verbose: Print generation details
     """
-    model_type = infer_model_type(df=df, y_name=y_name)
+    model_type = infer_model_type_from_df(df=df, y_name=y_name)
     if model_type == 'regression':
         return generate_and_save_schema_regression(
             df=df,
@@ -1396,7 +1675,7 @@ def generate_and_save_schema_regression(
     apply_scaling_parameters: bool = True,
     verbose: bool = False,
     y_range: Optional[Tuple[float, float]] = (0.0, 1.0),
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
     blacklist_patterns: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1431,7 +1710,7 @@ def generate_and_save_schema_classification(
     dropout: float = 0.1,
     apply_scaling_parameters: bool = True,
     # Schema generation parameters
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
     blacklist_patterns: Optional[List[str]] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
@@ -1630,17 +1909,27 @@ def df_to_scaled_tensors(df: pl.DataFrame, saved_models_path: pathlib.Path, mode
     schema_path = resolve_schema_path(saved_models_path, model_name)
     schema = json.load(open(schema_path))
 
-    feature_column_list = schema['feature_column_list']
     numerical_feature_cols = schema['numerical_feature_cols']
     categorical_feature_cols = schema['categorical_feature_cols']
+    feature_column_list = numerical_feature_cols + categorical_feature_cols
     scaling_params = schema.get('scaling_params', {})
+    preprocessing = schema.get('preprocessing')
 
     X_num = df.select(numerical_feature_cols).to_numpy().astype(np.float32)
     X_num = np.nan_to_num(X_num, nan=0.0, posinf=1e6, neginf=-1e6)
 
-    do_scale = (scaling_mode == 'on') or (scaling_mode == 'auto' and schema.get('apply_scaling', False))
-    if do_scale and scaling_params:
-        X_num = apply_feature_scaling(X_num, numerical_feature_cols, scaling_params, apply_scaling=True)
+    # NEW: Apply training-time preprocessing if present in schema
+    if preprocessing:
+        clip_low, clip_high = preprocessing.get('clip_range', (-100, 100))
+        scale_factor = preprocessing.get('scale_factor', 1)
+        X_num = np.clip(X_num, clip_low, clip_high)
+        if scale_factor and abs(scale_factor) != 1:
+            X_num = X_num / float(scale_factor)
+    else:
+        # Backward compatible mean/std scaling path
+        do_scale = (scaling_mode == 'on') or (scaling_mode == 'auto' and schema.get('apply_scaling', False))
+        if do_scale and scaling_params:
+            X_num = apply_feature_scaling(X_num, numerical_feature_cols, scaling_params, apply_scaling=True)
 
     X_cont = torch.tensor(X_num, dtype=torch.float32)
 
@@ -1649,7 +1938,8 @@ def df_to_scaled_tensors(df: pl.DataFrame, saved_models_path: pathlib.Path, mode
         cat_data_list = []
         cat_feature_info = schema.get('cat_feature_info', {})
         category_mappings = schema.get('category_mappings', {})
-        for col in tqdm(categorical_feature_cols, desc="map-categoricals", leave=False):
+        # Avoid tqdm/stqdm in Streamlit to prevent StopException noise
+        for col in categorical_feature_cols:
             mapping = category_mappings.get(col, {})
             unknown_index = cat_feature_info.get(col, 0)
             mapped_values = (
@@ -1693,7 +1983,7 @@ def train_regression_from_df(
     saved_models_path: Optional[pathlib.Path] = None,
     model_name: Optional[str] = None,
     apply_scaling_parameters: bool = True,
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
 ) -> Dict[str, Any]:
     torch.manual_seed(42)
     cols = list(df.columns)
@@ -1838,7 +2128,7 @@ def train_classification_from_df(
     saved_models_path: Optional[pathlib.Path] = None,
     model_name: Optional[str] = None,
     apply_scaling_parameters: bool = True,
-    schema_version: str = "1.0",
+    schema_version: str = "1.1",
 ) -> Dict[str, Any]:
     torch.manual_seed(42)
     cols = list(df.columns)
@@ -2456,10 +2746,18 @@ def generate_schema_from_raw_shards(
         category_mappings[col] = mapping
         cat_feature_info[col] = len(vals)
 
+    # Create feature_dtypes mapping - assume all cont_cols are Float32 and cat_cols are Categorical
+    all_feature_cols = cont_cols + cat_cols
+    feature_dtypes = {}
+    for col in cont_cols:
+        feature_dtypes[col] = "Float32"
+    for col in cat_cols:
+        feature_dtypes[col] = "Categorical"
+
     schema = {
-        "schema_version": "1.0",
-        "feature_column_list": cont_cols + cat_cols,
+        "schema_version": "1.1",
         "target_column": y_name,
+        "feature_dtypes": feature_dtypes,
         "mlp_layers": layers,
         "mlp_dropout": dropout,
         "scaling_params": scaling_params,
@@ -2468,11 +2766,6 @@ def generate_schema_from_raw_shards(
         "cat_feature_info": cat_feature_info,
         "numerical_feature_cols": cont_cols,
         "categorical_feature_cols": cat_cols,
-        "columns": {
-            "float32": cont_cols + [y_name],
-            "int32": [],
-            "categorical": cat_cols,
-        },
         "category_mappings": category_mappings,
         "model_type": model_type,
         "saved_models_path": str(pathlib.Path(saved_models_path)),
@@ -2740,10 +3033,11 @@ def train_model_regression_from_shards(
     if not y_name:
         raise ValueError("schema missing 'target_column'")
 
-    float_cols = schema.get('columns', {}).get('float32', [])
-    int_cols = schema.get('columns', {}).get('int32', [])
-    cat_cols = schema.get('columns', {}).get('categorical', [])
-    assert y_name in float_cols, f"{y_name} not in float columns"
+    # Verify this is a regression task - target should be float type
+    feature_dtypes = schema.get('feature_dtypes', {})
+    # For regression, we expect the model_type to be 'regression' 
+    model_type = schema.get('model_type', 'regression')
+    assert model_type == 'regression', f"Expected regression model, got {model_type}"
     
     # 🔧 GET SHARED PARAMETERS FROM SCHEMA
     # These parameters were set during schema generation and must match inference
@@ -2789,7 +3083,11 @@ def train_model_regression_from_shards(
             return shard_batch_iterator(valid_files, bs)
         return None
 
-    feature_cols = [c for c in float_cols if c != y_name] + int_cols + cat_cols
+    # Get feature columns from schema
+    numerical_feature_cols = schema.get('numerical_feature_cols', [])
+    categorical_feature_cols = schema.get('categorical_feature_cols', [])
+    code_mappings = schema.get('code_mappings', [])
+    feature_cols = numerical_feature_cols + categorical_feature_cols
 
     return _train_model_core(
         train_iterator_fn=train_iterator_fn,
@@ -3040,13 +3338,17 @@ def train_model_classification_from_shards(
         print(f"   - mlp_dropout: {dropout}")
         print(f"   - apply_scaling: {apply_scaling}")
 
-    float_cols = schema.get('columns', {}).get('float32', [])
-    int_cols = schema.get('columns', {}).get('int32', [])
-    cat_cols = schema.get('columns', {}).get('categorical', [])
-
     y_name = schema.get('target_column')
     if not y_name:
         raise ValueError("schema missing 'target_column'")
+    
+    # Verify this is a classification task
+    model_type = schema.get('model_type', 'classification')
+    assert model_type == 'classification', f"Expected classification model, got {model_type}"
+
+    # Get feature columns from schema
+    numerical_feature_cols = schema.get('numerical_feature_cols', [])
+    categorical_feature_cols = schema.get('categorical_feature_cols', [])
 
     # Gather shards
     shard_files = sorted(saved_models_path.glob(model_name + '_shard_*.pt'))
@@ -3118,7 +3420,7 @@ def train_model_classification_from_shards(
         training_time=None,
         train_samples=0,
         val_samples=0,
-        feature_cols=[c for c in float_cols if c != y_name] + int_cols + cat_cols,
+        feature_cols=numerical_feature_cols + categorical_feature_cols,
         y_name=y_name,
         input_dim=input_dim,
         device=torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu'),
@@ -3139,7 +3441,7 @@ def train_model_from_df(
     """
     assert len(y_names) == 1, "Only one target column supported"
     y_name = y_names[0]
-    model_type = infer_model_type(df=df, y_name=y_name)
+    model_type = infer_model_type_from_df(df=df, y_name=y_name)
     if model_type == 'regression':
         return train_regression_from_df(
             df=df,
@@ -3158,7 +3460,7 @@ def train_model_from_df(
             saved_models_path=kwargs.get('saved_models_path'),
             model_name=kwargs.get('model_name'),
             apply_scaling_parameters=kwargs.get('apply_scaling_parameters', True),
-            schema_version=kwargs.get('schema_version', '1.0'),
+            schema_version=kwargs.get('schema_version', '1.1'),
         )
     else:
         return train_classification_from_df(
@@ -3177,7 +3479,7 @@ def train_model_from_df(
             saved_models_path=kwargs.get('saved_models_path'),
             model_name=kwargs.get('model_name'),
             apply_scaling_parameters=kwargs.get('apply_scaling_parameters', True),
-            schema_version=kwargs.get('schema_version', '1.0'),
+            schema_version=kwargs.get('schema_version', '1.1'),
         )
 
 
@@ -3206,7 +3508,7 @@ def train_model_from_tensors(
     """
     model_type: Optional[str] = None
     if df_for_infer is not None and y_name is not None:
-        model_type = infer_model_type(df=df_for_infer, y_name=y_name)
+        model_type = infer_model_type_from_df(df=df_for_infer, y_name=y_name)
     elif y_train is not None and (y_train.dtype.is_float()):
         model_type = 'regression'
     elif y_train_cls is not None and (y_train_cls.dtype.is_integer()):
@@ -3256,7 +3558,7 @@ def train_model_from_tensors(
         )
 
 
-def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, df: pl.DataFrame, device: str = 'cpu', max_samples: Optional[int] = None) -> pl.DataFrame:
+def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, df: pl.DataFrame, device: str = 'cpu', max_samples: Optional[int] = None, strict_validation: bool = True, parity_drop_non_finite: bool = False) -> pl.DataFrame:
     """
     Embeddings-aware prediction:
     - Builds (X_cont, X_cat) via df_to_scaled_tensors (respects schema scaling).
@@ -3280,11 +3582,22 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
         raise FileNotFoundError(f"Schema file not found: {schema_path}")
     schema = json.load(open(schema_path))
 
-    # y_name comes from schema (used for naming and optional error calc)
+    # Validate inference DataFrame dtypes against schema (always strict for Pct_NS)
     y_name = schema.get('target_column') or 'Target'
+    strict_local = bool(strict_validation or (str(y_name).lower() == 'pct_ns'))
+    df = validate_inference_dataframe_dtypes(df, schema, strict=strict_local, verbose=True)
+
+    # y_name comes from schema (used for naming and optional error calc)
+    # already initialized above
+    
+    # Load y_range from schema for proper clamping
+    y_range_list = schema.get('y_range', [0, 1])
+    y_range = tuple(y_range_list) if y_range_list else None
 
     # Check for required feature columns
-    schema_features = schema['feature_column_list']
+    numerical_feature_cols = schema['numerical_feature_cols']
+    categorical_feature_cols = schema['categorical_feature_cols']
+    schema_features = numerical_feature_cols + categorical_feature_cols
     target_col = schema.get('target_column')
     
     # Check for missing required feature columns
@@ -3302,27 +3615,83 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
             max_n = len(df)
         test_subset_df = df.head(min(max_n, len(df)))
     
-    # Create a feature-only DataFrame for tensor building (preserves original df structure)
-    feature_cols = schema_features.copy()
-    if target_col and target_col in test_subset_df.columns:
-        feature_cols.append(target_col)
-    feature_df = test_subset_df.select(feature_cols)
+    # Defer building feature_df until after enforcing feature order and parity filtering
 
     # Build tensors directly using schema (no target required for inference)
     numerical_feature_cols = schema.get('numerical_feature_cols', [])
     categorical_feature_cols = schema.get('categorical_feature_cols', [])
     scaling_params = schema.get('scaling_params', {})
     apply_scaling = bool(schema.get('apply_scaling', False))
+    # Auto-create code twins (c*) strictly from schema.code_mappings if missing (do BEFORE enforcing order)
+    code_mappings = schema.get('code_mappings', [])
+    if code_mappings:
+        for m in code_mappings:
+            src = m.get('source')
+            code_col = m.get('code_col')
+            code_levels = m.get('classes', [])
+            mapping = m.get('mapping', {})
+            if code_col not in test_subset_df.columns:
+                if src not in test_subset_df.columns:
+                    raise ValueError(f"Strict mode: required source column '{src}' missing for code twin '{code_col}'")
+                vals = test_subset_df[src].to_list()
+                codes = []
+                for v in vals:
+                    if v is None:
+                        if 'NULL' in code_levels:
+                            codes.append(mapping['NULL'])
+                        else:
+                            raise ValueError(f"Strict mode: null in '{src}' but no 'NULL' class in schema")
+                    else:
+                        key = str(v)
+                        if key not in mapping:
+                            raise ValueError(f"Strict mode: unseen value '{v}' in '{src}'. Allowed: {code_levels}")
+                        codes.append(mapping[key])
+                test_subset_df = test_subset_df.with_columns(pl.Series(code_col, np.array(codes, dtype=np.int32)))
+
+    # Enforce feature ordering using feature_column_list if present
+    feature_column_list = schema.get('feature_column_list')
+    if feature_column_list:
+        # Extend feature order with any missing code twins so selection doesn't drop them
+        if code_mappings:
+            missing_codes = [m.get('code_col') for m in code_mappings if m.get('code_col') and m.get('code_col') not in feature_column_list]
+            if missing_codes:
+                feature_column_list = feature_column_list + missing_codes
+        # Reorder DataFrame columns to match training feature order strictly
+        missing = [c for c in feature_column_list if c not in test_subset_df.columns]
+        if missing:
+            raise ValueError(f"Inference DataFrame missing required features: {missing[:10]}{'...' if len(missing)>10 else ''}")
+        # Select in exact order
+        test_subset_df = test_subset_df.select(feature_column_list)
+        # Recompute numeric/categorical lists as positions
+        numerical_feature_cols = [c for c in feature_column_list if c in schema.get('numerical_feature_cols', [])]
+        categorical_feature_cols = [c for c in feature_column_list if c in schema.get('categorical_feature_cols', [])]
     category_mappings = schema.get('category_mappings', {})
     cat_feature_info = schema.get('cat_feature_info', {})
 
-    Xc = build_continuous_tensor(
-        feature_df,
-        numerical_feature_cols=numerical_feature_cols,
-        scaling_params=scaling_params,
-        apply_scaling=apply_scaling,
-        scaling_mode='auto',
-    )
+    # Build feature-only DataFrame in correct order (after enforcing ordering)
+    feature_cols_ordered = numerical_feature_cols + categorical_feature_cols
+    if target_col and target_col in test_subset_df.columns:
+        feature_cols_ordered = feature_cols_ordered + [target_col]
+    feature_df = test_subset_df.select(feature_cols_ordered)
+
+    if parity_drop_non_finite and numerical_feature_cols:
+        num_np = feature_df.select(numerical_feature_cols).to_numpy()
+        finite_mask = np.isfinite(num_np).all(axis=1)
+        feature_df = feature_df.filter(pl.Series(name="__mask__", values=finite_mask))
+
+    # Build continuous tensor with schema preprocessing (clip/scale) like classification path
+    X_num_np = feature_df.select(numerical_feature_cols).to_numpy().astype(np.float32)
+    X_num_np = np.nan_to_num(X_num_np, nan=0.0, posinf=1e6, neginf=-1e6)
+    preprocessing = schema.get('preprocessing')
+    if preprocessing:
+        clip_low, clip_high = preprocessing.get('clip_range', [-100, 100])
+        scale_factor = preprocessing.get('scale_factor', 1)
+        X_num_np = np.clip(X_num_np, clip_low, clip_high)
+        if scale_factor and abs(scale_factor) != 1:
+            X_num_np = X_num_np / float(scale_factor)
+    elif apply_scaling and scaling_params:
+        X_num_np = apply_feature_scaling(X_num_np, numerical_feature_cols, scaling_params, apply_scaling=True)
+    Xc = torch.tensor(X_num_np, dtype=torch.float32)
     Xk = build_categorical_tensor(
         feature_df,
         categorical_feature_cols=categorical_feature_cols,
@@ -3342,8 +3711,8 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
     expected_input_dim = int(Xc.shape[1]) + int(embedding_output_dim)
 
     # Get true first linear in_features (ignore embedding matrices)
-    if 'net.0.weight' in state_dict and state_dict['net.0.weight'].ndim == 2:
-        in_features = int(state_dict['net.0.weight'].shape[1])
+    if 'layers.0.weight' in state_dict and state_dict['layers.0.weight'].ndim == 2:
+        in_features = int(state_dict['layers.0.weight'].shape[1])
     else:
         linear_candidates = [
             (k, v) for k, v in state_dict.items()
@@ -3385,11 +3754,46 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
     # Build model: input_dim is continuous-only; embeddings added inside the model
     mlp_layers = schema.get('mlp_layers', [1024, 512, 256, 128])
     dropout = schema.get('mlp_dropout', 0.1)
+    
+    print(f"DEBUG: Model architecture - input_dim: {int(Xc.shape[1])}, cat_dims: {cat_dims}")
+    print(f"DEBUG: MLP layers: {mlp_layers}, dropout: {dropout}")
+    
     model = MLP(input_dim=int(Xc.shape[1]), cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout)
-    model.load_state_dict(state_dict)
+    
+    # Check model state before loading
+    print(f"DEBUG: Model created, loading state dict with {len(state_dict)} parameters")
+    
+    # Load state dict directly (all models now use layers architecture)
+    try:
+        model.load_state_dict(state_dict)
+        print(f"DEBUG: [OK] State dict loaded successfully")
+    except Exception as e:
+        print(f"DEBUG: [ERROR] Error loading state dict: {e}")
+        print(f"DEBUG: Expected keys: {list(model.state_dict().keys())}")
+        print(f"DEBUG: Provided keys: {list(state_dict.keys())}")
+        raise
 
     # Move model to specified device for inference
     model = model.to(device_t).eval()
+    
+    # Check if model parameters look reasonable
+    total_params = sum(p.numel() for p in model.parameters())
+    param_stats = []
+    for name, param in model.named_parameters():
+        if param.numel() > 0:
+            param_mean = param.data.mean().item()
+            param_std = param.data.std().item()
+            param_stats.append(f"{name}: mean={param_mean:.6f}, std={param_std:.6f}")
+    
+    print(f"DEBUG: Model has {total_params} total parameters")
+    print(f"DEBUG: Sample parameter stats: {param_stats[:3]}")
+    
+    # Check if all parameters are zero (indicating a problem)
+    all_zero = all(param.data.abs().max().item() < 1e-8 for param in model.parameters())
+    if all_zero:
+        print(f"DEBUG: [CRITICAL] All model parameters are near zero!")
+    else:
+        print(f"DEBUG: [OK] Model parameters have non-zero values")
 
     # Ensure tensors are correct dtype
     Xc = torch.as_tensor(Xc, dtype=torch.float32)
@@ -3397,15 +3801,166 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
 
     preds: List[float] = []
     bs = 8192
+    
+    print(f"DEBUG: Starting inference with {Xc.shape[0]} samples, batch_size={bs}")
+    print(f"DEBUG: y_range = {y_range}")
+    print(f"DEBUG: Input tensor shapes - Xc: {Xc.shape}, Xk: {Xk.shape if Xk is not None else None}")
+    
+    # Check input diversity
+    if Xc.shape[0] > 1:
+        input_std = Xc.std(dim=0).mean().item()
+        print(f"DEBUG: Input diversity - mean std across features: {input_std:.6f}")
+        if input_std < 1e-6:
+            print(f"DEBUG: ⚠️  WARNING: Very low input diversity - inputs may be nearly identical")
+    
+    temperature = float(schema.get('temperature', 1.0) or 1.0)
+    # Apply sigmoid only if explicitly requested by schema
+    apply_sigmoid = (schema.get('regression_activation', '').lower() == 'sigmoid')
+    try:
+        print(f"DEBUG[REG] Inference flags: apply_sigmoid={apply_sigmoid}, schema.temperature={temperature}")
+    except Exception:
+        pass
+
     with torch.no_grad():
-        for i in range(0, Xc.shape[0], bs):
+        for batch_idx, i in enumerate(range(0, Xc.shape[0], bs)):
             xb_cont = Xc[i:i+bs].to(device_t, non_blocking=True)
             xb_cat = None if Xk is None else Xk[i:i+bs].to(device_t, non_blocking=True)
+            
             with torch.amp.autocast('cuda', enabled=(device_t.type == 'cuda')):
-                yb = model(xb_cont, xb_cat).squeeze(-1).clamp(0.0, 1.0)
-            preds.extend(yb.cpu().tolist())
+                # Get raw model output
+                raw_output = model(xb_cont, xb_cat).squeeze(-1)
+                
+                # Debug first batch
+                if batch_idx == 0:
+                    raw_vals = raw_output.cpu().tolist()
+                    # Handle case where raw_vals is a single float (batch size 1)
+                    if isinstance(raw_vals, float):
+                        raw_vals = [raw_vals]
+                    print(f"DEBUG: Batch {batch_idx} raw model output:")
+                    print(f"  Min: {min(raw_vals):.6f}, Max: {max(raw_vals):.6f}")
+                    print(f"  Mean: {sum(raw_vals)/len(raw_vals):.6f}")
+                    print(f"  Sample: {[f'{x:.6f}' for x in raw_vals[:5]]}")
+                    
+                    # Check if model is actually computing different values
+                    unique_raw = len(set(raw_vals))
+                    if unique_raw == 1:
+                        print(f"  [CRITICAL] Model outputs identical values: {raw_vals[0]}")
+                        print(f"  Model may be broken, not loaded properly, or inputs are identical")
+                    else:
+                        print(f"  [OK] Model outputs {unique_raw} unique values")
+                
+                # Map regression output
+                if apply_sigmoid:
+                    yb = torch.sigmoid(raw_output / temperature)
+                    if y_range is not None:
+                        y_min, y_max = y_range
+                        yb = yb * (y_max - y_min) + y_min
+                    if batch_idx == 0:
+                        vals = yb.detach().cpu().tolist()
+                        if isinstance(vals, float):
+                            vals = [vals]
+                        print(f"DEBUG: Regression output stats (sigmoid-mapped):")
+                        print(f"  Min: {min(vals):.6f}, Max: {max(vals):.6f}")
+                        print(f"  Sample: {[f'{x:.6f}' for x in vals[:5]]}")
+                else:
+                    yb = raw_output
+                    if y_range is not None:
+                        yb = yb.clamp(min=y_range[0], max=y_range[1])
+                    if batch_idx == 0:
+                        vals = yb.detach().cpu().tolist()
+                        if isinstance(vals, float):
+                            vals = [vals]
+                        print(f"DEBUG: Regression output stats:")
+                        print(f"  Min: {min(vals):.6f}, Max: {max(vals):.6f}")
+                        print(f"  Sample: {[f'{x:.6f}' for x in vals[:5]]}")
+                    
+            batch_preds = yb.cpu().tolist()
+            # Handle case where batch_preds is a single float (batch size 1)
+            if isinstance(batch_preds, float):
+                batch_preds = [batch_preds]
+            preds.extend(batch_preds)
+
+    # Optional recentering: previously enforced mean ~0.5 for probability targets.
+    # Disabled by default to preserve model calibration; enable via schema['recenter_outputs']=True if desired.
+    recenter_outputs = bool(schema.get('recenter_outputs', False))
+    recenter_target_std = schema.get('recenter_target_std', None)
+    recenter_temperature = float(schema.get('recenter_temperature', 1.0) or 1.0)
+    try:
+        print(f"DEBUG[REG] Recentering flags: recenter_outputs={recenter_outputs}, target_std={recenter_target_std}, T_init={recenter_temperature}")
+    except Exception:
+        pass
+    try:
+        if recenter_outputs and apply_sigmoid and preds:
+            p = np.array(preds, dtype=float)
+            pre_std = float(np.std(p))
+            pre_unique = int(len(np.unique(p)))
+            print(f"DEBUG[REG] Pre-recenter stats: mean={float(np.mean(p)):.6f}, std={pre_std:.6f}, unique={pre_unique}")
+            if pre_std < 1e-6:
+                print(f"DEBUG[REG] Skipping recentering due to near-constant predictions (std<{1e-6})")
+            else:
+                eps = 1e-6
+                p = np.clip(p, eps, 1.0 - eps)
+                l = np.log(p / (1.0 - p))
+
+                def _recenter_with_temperature(T: float):
+                    lo_c, hi_c = -20.0, 20.0
+                    for _ in range(40):
+                        c_try = (lo_c + hi_c) / 2.0
+                        m = float((1.0 / (1.0 + np.exp(-((l - c_try) / max(T, 1e-6))))).mean())
+                        if m > 0.5:
+                            lo_c = c_try
+                        else:
+                            hi_c = c_try
+                    c_final = (lo_c + hi_c) / 2.0
+                    p_adj = 1.0 / (1.0 + np.exp(-((l - c_final) / max(T, 1e-6))))
+                    return p_adj, c_final
+
+                # If target std provided, search T to match it
+                if recenter_target_std is not None:
+                    try:
+                        target_std = float(recenter_target_std)
+                        lo_T, hi_T = 0.1, 10.0
+                        best_T, best_diff, best_p = recenter_temperature, float('inf'), None
+                        for _ in range(30):
+                            mid_T = (lo_T + hi_T) / 2.0
+                            p_try, c_try = _recenter_with_temperature(mid_T)
+                            s = float(np.std(p_try))
+                            diff = abs(s - target_std)
+                            if diff < best_diff:
+                                best_diff, best_T, best_p = diff, mid_T, p_try
+                            if s > target_std:
+                                lo_T = mid_T
+                            else:
+                                hi_T = mid_T
+                        preds = (best_p if best_p is not None else _recenter_with_temperature(recenter_temperature)[0]).tolist()
+                        print(f"DEBUG[REG] Recentered with target_std={target_std:.6f}; T≈{best_T:.4f}, std={float(np.std(preds)):.6f}")
+                    except Exception:
+                        p_new, c = _recenter_with_temperature(recenter_temperature)
+                        preds = p_new.tolist()
+                        print(f"DEBUG[REG] Recentered (fallback) with T={recenter_temperature:.4f}; std={float(np.std(p_new)):.6f}")
+                else:
+                    p_new, c = _recenter_with_temperature(recenter_temperature)
+                    preds = p_new.tolist()
+                    post_std = float(np.std(p_new))
+                    post_unique = int(len(np.unique(p_new)))
+                    print(f"DEBUG[REG] Recentered to mean≈{float(np.mean(p_new)):.4f} using T={recenter_temperature:.4f}; std={post_std:.6f}, unique={post_unique}")
+        elif apply_sigmoid and preds:
+            # Log that recentering is intentionally disabled
+            try:
+                p = np.array(preds, dtype=float)
+                print(f"DEBUG[REG] Recenter disabled. Mean={float(np.mean(p)):.6f}, std={float(np.std(p)):.6f}, unique={int(len(np.unique(p)))}")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     # Assemble results: return ONLY prediction-related columns
+    try:
+        arr = np.array(preds, dtype=float)
+        if arr.size:
+            print(f"DEBUG[REG] Final preds stats: mean={float(np.mean(arr)):.6f}, std={float(np.std(arr)):.6f}, min={float(np.min(arr)):.6f}, max={float(np.max(arr)):.6f}, unique={int(len(np.unique(arr)))}")
+    except Exception:
+        pass
     out_cols = {
         f'{y_name}_Pred': preds,
     }
@@ -3427,6 +3982,8 @@ def predict_model(
     max_samples: Optional[int] = None,
     top_k: int = 1,  # Classification only
     return_probs: bool = False,  # Classification only
+    strict_validation: bool = True,  # Strict schema validation
+    parity_drop_non_finite: bool = False,  # Mirror training: drop rows with non-finite features
 ) -> pl.DataFrame:
     """
     Make predictions using trained model and schema parameters.
@@ -3440,7 +3997,8 @@ def predict_model(
     - top_k: Return top K class predictions (classification only)
     - return_probs: Include prediction probabilities (classification only)
     """
-    model_type = infer_model_type(saved_models_path=saved_models_path, model_name=model_name, df=df)
+    # Post-training inference: rely on schema only for model_type
+    model_type = get_model_type_from_schema(saved_models_path=saved_models_path, model_name=model_name)
     if model_type == 'regression':
         return predict_regression_model(
             saved_models_path=saved_models_path,
@@ -3448,6 +4006,8 @@ def predict_model(
             df=df,
             device=device,
             max_samples=max_samples,
+            strict_validation=strict_validation,
+            parity_drop_non_finite=parity_drop_non_finite,
         )
     else:
         return predict_classification_model(
@@ -3458,6 +4018,8 @@ def predict_model(
             top_k=top_k,
             max_samples=max_samples,
             return_probs=return_probs,
+            strict_validation=strict_validation,
+            parity_drop_non_finite=parity_drop_non_finite,
         )
 
 def predict_classification_model(
@@ -3470,6 +4032,8 @@ def predict_classification_model(
     top_k: int = 1,
     max_samples: Optional[int] = None,
     return_probs: bool = False,
+    strict_validation: bool = True,
+    parity_drop_non_finite: bool = False,
 ) -> pl.DataFrame:
     """
     Embeddings-aware classification prediction with softmax and optional top-k outputs.
@@ -3503,6 +4067,9 @@ def predict_classification_model(
     if not schema_path.exists():
         raise FileNotFoundError(f"Schema file not found: {schema_path}")
     schema = json.load(open(schema_path))
+    
+    # Validate inference DataFrame dtypes against schema
+    df = validate_inference_dataframe_dtypes(df, schema, strict=strict_validation, verbose=True)
 
     # y_name from schema
     y_name = schema.get('target_column') or 'Target'
@@ -3513,18 +4080,106 @@ def predict_classification_model(
     # Build tensors using shared helpers (do not require target column)
     numerical_feature_cols = schema.get('numerical_feature_cols', [])
     categorical_feature_cols = schema.get('categorical_feature_cols', [])
+    # Ensure numeric feature list includes any c* twins from schema
+    code_mappings = schema.get('code_mappings', [])
+    if code_mappings:
+        for m in code_mappings:
+            cc = m.get('code_col')
+            if cc and cc not in numerical_feature_cols:
+                numerical_feature_cols.append(cc)
+    # Strictly create any required code twins (c*) from schema code_mappings
+    code_mappings = schema.get('code_mappings', [])
+    if code_mappings:
+        for m in code_mappings:
+            src = m.get('source')
+            code_col = m.get('code_col')
+            # Use distinct name to avoid any chance of shadowing target classes
+            code_levels = m.get('classes', [])
+            mapping = m.get('mapping', {})
+            if code_col and code_col not in test_subset_df.columns:
+                if src not in test_subset_df.columns:
+                    raise ValueError(f"Strict mode: required source column '{src}' missing for code twin '{code_col}'")
+                vals = test_subset_df[src].to_list()
+                codes = []
+                for v in vals:
+                    if v is None:
+                        if 'NULL' in code_levels:
+                            codes.append(mapping['NULL'])
+                        else:
+                            raise ValueError(f"Strict mode: null in '{src}' but no 'NULL' class in schema")
+                    else:
+                        key = str(v)
+                        if key not in mapping:
+                            raise ValueError(f"Strict mode: unseen value '{v}' in '{src}'. Allowed: {code_levels}")
+                        codes.append(mapping[key])
+                test_subset_df = test_subset_df.with_columns(pl.Series(code_col, np.array(codes, dtype=np.int32)))
+                if code_col not in numerical_feature_cols:
+                    numerical_feature_cols.append(code_col)
+
+    # Enforce feature order via feature_column_list; fallback to training stats 'feature_cols' if present
+    feature_column_list = schema.get('feature_column_list') or schema.get('feature_cols')
+    if feature_column_list:
+        # Extend order with any c* twins not present so selection won't drop them
+        if code_mappings:
+            missing_codes = [m.get('code_col') for m in code_mappings if m.get('code_col') and m.get('code_col') not in feature_column_list]
+            if missing_codes:
+                feature_column_list = feature_column_list + missing_codes
+        missing = [c for c in feature_column_list if c not in test_subset_df.columns]
+        if missing:
+            raise ValueError(f"Inference DataFrame missing required features: {missing[:10]}{'...' if len(missing)>10 else ''}")
+        test_subset_df = test_subset_df.select(feature_column_list)
+        # Recalculate numeric/categorical lists from ordered columns, but make sure c* twins are included
+        base_numeric = set(schema.get('numerical_feature_cols', []))
+        if code_mappings:
+            for m in code_mappings:
+                cc = m.get('code_col')
+                if cc:
+                    base_numeric.add(cc)
+        numerical_feature_cols = [c for c in feature_column_list if c in base_numeric]
+        categorical_feature_cols = [c for c in feature_column_list if c in schema.get('categorical_feature_cols', [])]
+        try:
+            print(f"DEBUG[CLS] Using feature order from {'feature_column_list' if 'feature_column_list' in schema else 'feature_cols'} (n={len(feature_column_list)})")
+        except Exception:
+            pass
     scaling_params = schema.get('scaling_params', {})
     apply_scaling = bool(schema.get('apply_scaling', False))
     category_mappings = schema.get('category_mappings', {})
     cat_feature_info = schema.get('cat_feature_info', {})
 
-    Xc = build_continuous_tensor(
-        test_subset_df,
-        numerical_feature_cols=numerical_feature_cols,
-        scaling_params=scaling_params,
-        apply_scaling=apply_scaling,
-        scaling_mode='auto',
-    )
+    # If parity mode is enabled, drop rows with non-finite numerical features
+    if parity_drop_non_finite and numerical_feature_cols:
+        num_np = test_subset_df.select(numerical_feature_cols).to_numpy()
+        finite_mask = np.isfinite(num_np).all(axis=1)
+        test_subset_df = test_subset_df.filter(pl.Series(name="__mask__", values=finite_mask))
+
+    # Build continuous tensor applying training-time preprocessing when present
+    # DEBUG: Check actual DataFrame columns vs what we're trying to select
+    print(f"   DEBUG: test_subset_df has {len(test_subset_df.columns)} columns")
+    print(f"   DEBUG: Attempting to select {len(numerical_feature_cols)} numerical columns")
+    numerical_in_df = [c for c in numerical_feature_cols if c in test_subset_df.columns]
+    numerical_missing = [c for c in numerical_feature_cols if c not in test_subset_df.columns]
+    if numerical_missing:
+        print(f"   DEBUG: Missing numerical columns: {numerical_missing[:10]}")
+    print(f"   DEBUG: Found {len(numerical_in_df)} numerical columns in DataFrame")
+    
+    X_num = test_subset_df.select(numerical_feature_cols).to_numpy().astype(np.float32)
+    X_num = np.nan_to_num(X_num, nan=0.0, posinf=1e6, neginf=-1e6)
+    preprocessing = schema.get('preprocessing')
+    if preprocessing:
+        clip_low, clip_high = preprocessing.get('clip_range', [-100, 100])
+        scale_factor = preprocessing.get('scale_factor', 1)
+        X_num = np.clip(X_num, clip_low, clip_high)
+        if scale_factor and abs(scale_factor) != 1:
+            X_num = X_num / float(scale_factor)
+    elif apply_scaling and scaling_params:
+        # Backward compatibility: mean/std scaling path
+        X_num = apply_feature_scaling(X_num, numerical_feature_cols, scaling_params, apply_scaling=True)
+    # DEBUG: numeric tensor stats for classification
+    try:
+        print(f"DEBUG[CLS] Numeric tensor stats (n={X_num.shape[0]}): mean={np.mean(X_num):.6f}, std={np.std(X_num):.6f}, min={np.min(X_num):.6f}, max={np.max(X_num):.6f}")
+    except Exception:
+        pass
+    Xc = torch.tensor(X_num, dtype=torch.float32)
     Xk = build_categorical_tensor(
         test_subset_df,
         categorical_feature_cols=categorical_feature_cols,
@@ -3568,18 +4223,28 @@ def predict_classification_model(
     if not linear_candidates:
         raise RuntimeError("Could not locate any linear layer weights in checkpoint")
 
-    # Prefer a layer named net.0.weight when present, else widest input weight
+    # Prefer a layer named layers.0.weight when present, else widest input weight
     in_features = None
-    if 'net.0.weight' in state_dict and state_dict['net.0.weight'].ndim == 2:
-        in_features = int(state_dict['net.0.weight'].shape[1])
+    if 'layers.0.weight' in state_dict and state_dict['layers.0.weight'].ndim == 2:
+        in_features = int(state_dict['layers.0.weight'].shape[1])
     else:
         in_features = max(linear_candidates, key=lambda kv: kv[1].shape[1])[1].shape[1]
 
+    print(f"   Categorical features: {len(categorical_feature_cols)} columns")
+    print(f"   Numerical features: {len(numerical_feature_cols)} columns")
+    
+    # DEBUG: Check for overlap between numerical and categorical
+    overlap = set(numerical_feature_cols) & set(categorical_feature_cols)
+    if overlap:
+        print(f"   ⚠️  OVERLAP detected: {overlap} appears in both numerical and categorical lists")
+    
+    # DEBUG: Show the calculation breakdown
+    print(f"   DEBUG: Xc.shape[1]={int(Xc.shape[1])}, embedding_output_dim={embedding_output_dim}, expected_input_dim={expected_input_dim}")
+    print(f"   DEBUG: Model in_features={in_features}")
+    
     if in_features != expected_input_dim:
         approach_str = "embeddings" if uses_embeddings else "concatenation"
         print(f"⚠️  Feature count mismatch detected:")
-        print(f"   Model expects: {in_features} inputs")
-        print(f"   Schema computes: {expected_input_dim} (cont: {Xc.shape[1]}, categorical: {embedding_output_dim}) using {approach_str} approach")
         print(f"   Training schema had: {len(schema.get('numerical_feature_cols', []))} numerical + {len(schema.get('categorical_feature_cols', []))} categorical features")
         print(f"   Inference data has: {len(test_subset_df.columns)} total columns")
         
@@ -3588,7 +4253,9 @@ def predict_classification_model(
             print("   ⚡ Skipping detailed column analysis (large DataFrame optimization)")
         else:
             # Check if inference data has extra columns not in schema
-            schema_features = set(schema.get('feature_column_list', []))
+            numerical_cols = schema.get('numerical_feature_cols', [])
+            categorical_cols = schema.get('categorical_feature_cols', [])
+            schema_features = set(numerical_cols + categorical_cols)
             inference_features = set(test_subset_df.columns)
             extra_features = inference_features - schema_features
             missing_features = schema_features - inference_features
@@ -3605,22 +4272,16 @@ def predict_classification_model(
         )
 
     # Infer number of classes
-    if idx_to_class is not None:
-        num_classes = len(idx_to_class)
-    elif classes is not None:
-        num_classes = len(classes)
+    # STRICT: derive number of classes from the checkpoint final linear layer
+    layers_weight_layers = [(k, v) for k, v in linear_candidates if k.startswith('layers.') and k.endswith('.weight')]
+    def _layers_index(name: str) -> int:
+        m = re.match(r'^layers\.(\d+)\.weight$', name)
+        return int(m.group(1)) if m else -1
+    if layers_weight_layers:
+        last_key, last_w = max(layers_weight_layers, key=lambda kv: _layers_index(kv[0]))
+        num_classes = int(last_w.shape[0])
     else:
-        # Try to find the last linear layer by highest net index; fallback to smallest out_features
-        net_weight_layers = [(k, v) for k, v in linear_candidates if k.startswith('net.') and k.endswith('.weight')]
-        def _net_index(name: str) -> int:
-            m = re.match(r'^net\.(\d+)\.weight$', name)
-            return int(m.group(1)) if m else -1
-        if net_weight_layers:
-            last_key, last_w = max(net_weight_layers, key=lambda kv: _net_index(kv[0]))
-            num_classes = int(last_w.shape[0])
-        else:
-            # Fallback: choose the linear layer with the smallest out_features as output
-            num_classes = int(min(linear_candidates, key=lambda kv: kv[1].shape[0])[1].shape[0])
+        num_classes = int(min(linear_candidates, key=lambda kv: kv[1].shape[0])[1].shape[0])
 
     # Build a classification MLP with embeddings matching checkpoint shapes (if any)
     class MLPClassification(torch.nn.Module):
@@ -3643,7 +4304,7 @@ def predict_classification_model(
                     blocks.append(torch.nn.Dropout(dropout))
                 prev = w
             blocks.append(torch.nn.Linear(prev, out_classes))
-            self.net = torch.nn.Sequential(*blocks)
+            self.layers = torch.nn.Sequential(*blocks)
         def forward(self, x_cont, x_cat=None):
             if self.embeddings and x_cat is not None and x_cat.numel() > 0:
                 # Embeddings approach
@@ -3654,7 +4315,7 @@ def predict_classification_model(
                 x = torch.cat([x_cont, x_cat.float()], 1)
             else:
                 x = x_cont
-            return self.net(x)
+            return self.layers(x)
 
     mlp_layers = schema.get('mlp_layers', [1024, 512, 256, 128])
     dropout = schema.get('mlp_dropout', 0.1)
@@ -3669,11 +4330,8 @@ def predict_classification_model(
         total_input_dim = cont_dim + cat_dim
         model = MLPClassification(dim_in=total_input_dim, cat_dims_local=None, widths=mlp_layers, dropout=dropout, out_classes=num_classes)
 
-    # Load weights (strict by default; fallback to non-strict if necessary)
-    try:
-        model.load_state_dict(state_dict, strict=True)
-    except Exception:
-        model.load_state_dict(state_dict, strict=False)
+    # Load weights strictly to catch any silent shape/key drift
+    model.load_state_dict(state_dict, strict=True)
 
     # Move model to specified device for inference
     model = model.to(device_t).eval()
@@ -3691,7 +4349,9 @@ def predict_classification_model(
     probs_out: List[List[float]] = []
 
     bs = 8192
+    temperature = float(schema.get('temperature', 1.0) or 1.0)
     with torch.no_grad():
+        max_prob_values: List[float] = []
         for i in range(0, Xc.shape[0], bs):
             xb_cont = Xc[i:i+bs].to(device_t, non_blocking=True)
             xb_cat = None if Xk is None else Xk[i:i+bs].to(device_t, non_blocking=True)
@@ -3702,28 +4362,85 @@ def predict_classification_model(
                 else:
                     # Concatenation approach: combine inputs in forward method
                     logits = model(xb_cont, xb_cat)
+                # Temperature scaling for calibration (if provided in schema)
+                if temperature and temperature != 1.0:
+                    logits = logits / float(temperature)
                 batch_probs = F.softmax(logits, dim=-1)
                 batch_pred = torch.argmax(batch_probs, dim=-1)
-            pred_codes.extend(batch_pred.cpu().tolist())
+            batch_pred_list = batch_pred.cpu().tolist()
+            pred_codes.extend(batch_pred_list)
+            
+            # Debug: Show raw model outputs for first few predictions
+            if len(pred_codes) <= 5:  # Only for first batch
+                batch_probs_list = batch_probs.cpu().tolist()
+                for j in range(min(5, len(batch_pred_list))):
+                    pred_idx = batch_pred_list[j]
+                    probs = batch_probs_list[j]
+                    top_5_probs = sorted(enumerate(probs), key=lambda x: x[1], reverse=True)[:5]
+                    print(f"DEBUG: Sample {len(pred_codes)-len(batch_pred_list)+j}: predicted_idx={pred_idx}, top_5_probs={top_5_probs}")
+            
+            # Collect max-probability for diagnostics
+            try:
+                max_prob_values.extend(torch.max(batch_probs, dim=1).values.cpu().tolist())
+            except Exception:
+                pass
             if return_probs:
                 probs_out.extend(batch_probs.cpu().tolist())
             if top_k and top_k > 1:
                 topk = torch.topk(batch_probs, k=min(top_k, batch_probs.shape[1]), dim=-1)
                 topk_codes.extend(topk.indices.cpu().tolist())
 
+    # Print prediction confidence summary
+    try:
+        if max_prob_values:
+            mp = np.array(max_prob_values, dtype=float)
+            print(f"DEBUG[CLS] Confidence stats: mean={mp.mean():.4f}, std={mp.std():.4f}, min={mp.min():.4f}, max={mp.max():.4f}")
+    except Exception:
+        pass
+
     # Build label mapping
     if idx_to_class is None and classes is not None:
         idx_to_class = {i: c for i, c in enumerate(classes)}
     if idx_to_class is None:
-        # Prefer explicit class_to_idx from schema, else fall back to classes list
+        # Prefer explicit class_to_idx from schema (comes from training), else fall back
         class_to_idx_map = schema.get('class_to_idx', {})
         if class_to_idx_map:
-            # Reverse mapping: index -> class label
             idx_to_class = {v: k for k, v in class_to_idx_map.items()}
         else:
-            classes_list = schema.get('classes', [])
-            if classes_list:
-                idx_to_class = {i: c for i, c in enumerate(classes_list)}
+            # Then try label_mapping format (string index keys)
+            label_mapping = schema.get('label_mapping', {})
+            if label_mapping:
+                idx_to_class = {int(k): v for k, v in label_mapping.items()}
+            else:
+                classes_list = schema.get('classes', [])
+                if classes_list:
+                    idx_to_class = {i: c for i, c in enumerate(classes_list)}
+
+    # DEBUG: Show mapping and predicted distribution for diagnostics
+    try:
+        if idx_to_class is not None:
+            sample_keys = sorted(list(idx_to_class.keys()))[:20]
+            sample_map = {k: idx_to_class[k] for k in sample_keys}
+            print(f"DEBUG[CLS] idx_to_class sample (first 20): {sample_map}")
+        # Predicted code counts top 20
+        if pred_codes:
+            import collections as _collections
+            cnt = _collections.Counter(pred_codes)
+            top20 = cnt.most_common(20)
+            if idx_to_class is not None:
+                top20_lbl = [(idx_to_class.get(k, k), v) for k, v in top20]
+                print(f"DEBUG[CLS] Top-20 predicted labels: {top20_lbl}")
+            else:
+                print(f"DEBUG[CLS] Top-20 predicted codes: {top20}")
+        # Compare mapping labels to schema classes if present
+        classes_list_dbg = schema.get('classes', [])
+        if classes_list_dbg and idx_to_class is not None:
+            mapping_labels = set(idx_to_class.values())
+            diff_schema_minus_map = set(classes_list_dbg) - mapping_labels
+            diff_map_minus_schema = mapping_labels - set(classes_list_dbg)
+            print(f"DEBUG[CLS] Mapping vs schema classes: missing_in_map={len(diff_schema_minus_map)}, extra_in_map={len(diff_map_minus_schema)}")
+    except Exception:
+        pass
 
     # Assemble output DataFrame
     base_name = y_name if (y_name is not None and len(str(y_name)) > 0) else 'Target'
@@ -4219,7 +4936,7 @@ def analyze_prediction_results(
 ) -> Dict[str, Any]:
     """Wrapper: choose regression/classification analysis via shared inference."""
     # Use inference on DataFrame
-    model_type = infer_model_type(df=results_df, y_name=y_name)
+    model_type = infer_model_type_from_df(df=results_df, y_name=y_name)
     if model_type == 'regression':
         return analyze_prediction_results_regression(
             results_df=results_df,
@@ -4608,7 +5325,7 @@ def display_feature_importances_regression(
     weight_candidates = [(k, v) for k, v in state_dict.items() if torch.is_tensor(v) and v.ndim == 2]
 
     first_key, first_weight = None, None
-    for preferred in ('net.0.weight', 'model.0.weight'):
+    for preferred in ('layers.0.weight', 'model.0.weight'):
         w = state_dict.get(preferred)
         if torch.is_tensor(w) and w.ndim == 2:
             first_key, first_weight = preferred, w
