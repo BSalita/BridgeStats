@@ -1,5 +1,6 @@
 # contains functions to augment df with additional columns
 # mostly polars functions
+# some functionality is similar to mlBridgeAcblLib.py which operates on a single game download, not all games in the db.
 
 # todo:
 # DD_Score_\d_[CDHSN]_[NESW] has reversed strain and direction columns compared to other column naming conventions.
@@ -2677,7 +2678,7 @@ def add_board_matchpoint_top(df: pl.DataFrame) -> pl.DataFrame:
     - 'MP_Top': Maximum matchpoint score for each board in the session
     """
     df = df.with_columns(
-        pl.col("MP_NS").add(pl.col('MP_EW')).alias("MP_Top"),
+        pl.col("MP_NS").add(pl.col('MP_EW')).cast(pl.Float64).round(0).cast(pl.UInt32).alias("MP_Top"),
         # pl.col('Score').count().over(['session_id','PBN','Board']).sub(1).alias('MP_Top') # acceptable alternative?
     )
     # filtering out bad data. Only in club data?
@@ -2751,8 +2752,8 @@ def add_percentage_scores(df: pl.DataFrame) -> pl.DataFrame:
     - DataFrame with added percentage score columns
     """
     df = df.with_columns([
-        (pl.col('MP_NS') / pl.col('MP_Top')).alias('Pct_NS'),
-        (pl.col('MP_EW') / pl.col('MP_Top')).alias('Pct_EW')
+        (pl.col('MP_NS') / pl.col('MP_Top')).cast(pl.Float32).alias('Pct_NS'),
+        (pl.col('MP_EW') / pl.col('MP_Top')).cast(pl.Float32).alias('Pct_EW')
     ])
     # df =  df.filter(~pl.col('Pct_NS').is_infinite() & ~pl.col('Pct_EW').is_infinite())
     return df
@@ -3040,6 +3041,7 @@ def add_dd_scores_basic(df: pl.DataFrame, scores_d: Dict) -> pl.DataFrame:
     ])
     
     return df
+
 def add_dd_scores_contract_dependent(df: pl.DataFrame) -> pl.DataFrame:
     """Create contract-dependent DD_Score columns (requires BidLvl, BidSuit, Declarer_Direction).
     

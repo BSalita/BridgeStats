@@ -5294,7 +5294,7 @@ def display_feature_importances_regression(
     schema_path=None,
     top_n=50,
     bottom_n=50,
-    return_df=False,
+    return_df=True,
     verbose=True,
 ):
     """
@@ -5387,8 +5387,7 @@ def display_feature_importances_regression(
         print(f"\nBottom {k_bot} features:")
         display(imp_df_sorted.tail(k_bot).sort('importance'))
 
-    if return_df:
-        return imp_df_sorted
+    return imp_df_sorted
 
 
 def display_feature_importances(
@@ -5398,16 +5397,57 @@ def display_feature_importances(
 ):
     """Wrapper: display feature importances for classification and regression.
 
-    For classification we reuse regression weight visualization (first-layer weights)
-    since the network structure is the same; importance is layer-1 weight magnitude.
+    Auto-detects model type from the schema and routes accordingly. Always
+    returns a Polars DataFrame. Classification without validation data falls
+    back to first-layer weight visualization (same as regression).
     """
+    top_n = kwargs.get('top_n', 50)
+    bottom_n = kwargs.get('bottom_n', 50)
+    verbose = kwargs.get('verbose', True)
+    # Classification-only optional args
+    val_df_or_tensors = kwargs.get('val_df_or_tensors')
+    feature_cols = kwargs.get('feature_cols')
+
+    try:
+        schema_path = resolve_schema_path(saved_models_path, model_name)
+        model_type = None
+        if schema_path.exists():
+            schema = json.load(open(schema_path))
+            if schema.get('model_type') == 'classification' or ('class_to_idx' in schema):
+                model_type = 'classification'
+            else:
+                model_type = 'regression'
+        else:
+            model_type = 'regression'
+    except Exception:
+        model_type = 'regression'
+
+    if model_type == 'classification':
+        # If validation data + explicit feature columns are provided, use permutation importance;
+        # otherwise fall back to weight-based importance (reuses regression logic)
+        if val_df_or_tensors is not None and feature_cols is not None:
+            # Here, we expect a torch model; since we typically call the wrapper without a model
+            # we only support the saved-model pathway unless caller passes a model explicitly.
+            # So, route to permutation using saved model is not supported here; keep API strict.
+            raise ValueError("display_feature_importances wrapper: permutation mode requires calling display_feature_importances_classification(model, feature_cols, val_df_or_tensors=...) directly")
+
+        return display_feature_importances_classification(
+            saved_models_path,
+            model_name,
+            val_df_or_tensors=None,
+            top_n=top_n,
+            bottom_n=bottom_n,
+            return_df=True,
+            verbose=verbose,
+        )
+
     return display_feature_importances_regression(
         saved_models_path=saved_models_path,
         model_name=model_name,
-        top_n=kwargs.get('top_n', 50),
-        bottom_n=kwargs.get('bottom_n', 50),
-        return_df=kwargs.get('return_df', False),
-        verbose=kwargs.get('verbose', True),
+        top_n=top_n,
+        bottom_n=bottom_n,
+        return_df=True,
+        verbose=verbose,
     )
 
 def display_feature_importances_classification(
