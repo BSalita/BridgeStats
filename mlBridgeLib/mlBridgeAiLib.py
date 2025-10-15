@@ -925,12 +925,19 @@ def validate_dataframe_dtypes(
     mismatches = []
     conversions_needed = []
     
+    # Treat String/Utf8/Categorical as equivalent since they're processed identically
+    string_like_types = {'String', 'Utf8', 'Categorical'}
+    
     for col, expected_dtype_str in expected_dtypes.items():
         if col not in df_schema:
             continue  # Missing columns handled elsewhere
             
         actual_dtype = df_schema[col]
         actual_dtype_str = str(actual_dtype)
+        
+        # Allow String/Utf8/Categorical to be used interchangeably
+        if expected_dtype_str in string_like_types and actual_dtype_str in string_like_types:
+            continue  # These are equivalent for our purposes
         
         if actual_dtype_str != expected_dtype_str:
             mismatches.append(f"  {col}: expected {expected_dtype_str}, got {actual_dtype_str}")
