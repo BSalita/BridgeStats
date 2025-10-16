@@ -928,6 +928,13 @@ def validate_dataframe_dtypes(
     # Treat String/Utf8/Categorical as equivalent since they're processed identically
     string_like_types = {'String', 'Utf8', 'Categorical'}
     
+    def normalize_dtype_str(dtype_str: str) -> str:
+        """Normalize dtype string by stripping categorical ordering specs."""
+        # Strip out ordering='physical' or ordering='lexical' from Categorical types
+        if dtype_str.startswith('Categorical'):
+            return 'Categorical'
+        return dtype_str
+    
     for col, expected_dtype_str in expected_dtypes.items():
         if col not in df_schema:
             continue  # Missing columns handled elsewhere
@@ -935,11 +942,15 @@ def validate_dataframe_dtypes(
         actual_dtype = df_schema[col]
         actual_dtype_str = str(actual_dtype)
         
+        # Normalize both to handle categorical ordering variations
+        expected_normalized = normalize_dtype_str(expected_dtype_str)
+        actual_normalized = normalize_dtype_str(actual_dtype_str)
+        
         # Allow String/Utf8/Categorical to be used interchangeably
-        if expected_dtype_str in string_like_types and actual_dtype_str in string_like_types:
+        if expected_normalized in string_like_types and actual_normalized in string_like_types:
             continue  # These are equivalent for our purposes
         
-        if actual_dtype_str != expected_dtype_str:
+        if actual_normalized != expected_normalized:
             mismatches.append(f"  {col}: expected {expected_dtype_str}, got {actual_dtype_str}")
             conversions_needed.append((col, expected_dtype_str, actual_dtype_str))
     
