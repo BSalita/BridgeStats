@@ -1527,18 +1527,41 @@ def generate_and_save_schema_core(
     category_mappings: Dict[str, Dict[Any, int]] = {}
     for col in categorical_feature_cols:
         if col in schema_map:
-            col_data = df[col]
-            dt = dtypes[col]
-            # Handle String columns - include null handling
-            if _is_string_dtype(dt):
-                uniques = col_data.fill_null("__NULL__").unique()
+            # Use predefined enum from CATEGORICAL_SCHEMAS if available
+            if hasattr(mlBridgeLib, 'CATEGORICAL_SCHEMAS') and col in mlBridgeLib.CATEGORICAL_SCHEMAS:
+                # Get all possible values from the enum
+                enum_def = mlBridgeLib.CATEGORICAL_SCHEMAS[col]
+                if hasattr(enum_def, 'categories'):
+                    values = list(enum_def.categories)
+                    if verbose:
+                        print(f"  Using predefined enum for '{col}': {len(values)} categories")
+                else:
+                    # Fallback to data if enum doesn't have categories
+                    col_data = df[col]
+                    dt = dtypes[col]
+                    if _is_string_dtype(dt):
+                        uniques = col_data.fill_null("__NULL__").unique()
+                    else:
+                        uniques = col_data.drop_nulls().unique()
+                    values = uniques.to_list() if hasattr(uniques, 'to_list') else list(uniques)
+                    values = sorted(values, key=lambda x: str(x) if x is not None else "")
             else:
-                # Categorical columns - standard handling
-                uniques = col_data.drop_nulls().unique()
+                # No predefined enum - infer from data
+                col_data = df[col]
+                dt = dtypes[col]
+                # Handle String columns - include null handling
+                if _is_string_dtype(dt):
+                    uniques = col_data.fill_null("__NULL__").unique()
+                else:
+                    # Categorical columns - standard handling
+                    uniques = col_data.drop_nulls().unique()
+                
+                values = uniques.to_list() if hasattr(uniques, 'to_list') else list(uniques)
+                # Sort for deterministic ordering
+                values = sorted(values, key=lambda x: str(x) if x is not None else "")
+                if verbose:
+                    print(f"  Inferred categories from data for '{col}': {len(values)} unique values")
             
-            values = uniques.to_list() if hasattr(uniques, 'to_list') else list(uniques)
-            # Sort for deterministic ordering
-            values = sorted(values, key=lambda x: str(x) if x is not None else "")
             mapping = {v: i for i, v in enumerate(values)}
             category_mappings[col] = mapping
             cat_feature_info[col] = len(values)  # unknown will map to this index
