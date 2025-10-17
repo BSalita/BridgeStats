@@ -4428,13 +4428,11 @@ def compute_matchpoints_for_scores(df: pl.DataFrame, score_columns: list[str]) -
     """
     out = df
     
-    # Add standard columns if not already included and they exist in the DataFrame
-    standard_columns = ['DD_Score_NS', 'DD_Score_EW', 'Par_NS', 'Par_EW']
+    # Note: DD_Score and Par columns are intentionally NOT included here because they
+    # get more sophisticated computation in compute_dd_score_percentages() and 
+    # compute_par_percentages() which use a proper lookup-based algorithm.
+    # Including them here would create duplicate columns with _right suffix.
     all_columns = list(score_columns)  # Make a copy to avoid modifying the input
-    
-    for col in standard_columns:
-        if col in out.columns and col not in all_columns:
-            all_columns.append(col)
     
     # Filter to only include columns that exist in the DataFrame and don't already have MP columns
     existing_columns = []
@@ -6025,6 +6023,12 @@ class MatchPointAugmenter:
         # Assert columns were created (check for at least one MP column)
         mp_columns = [col for col in self.df.columns if col.startswith('MP_') and col != 'MP_Top']
         assert len(mp_columns) > 0, "No MP_* columns were created"
+        
+        # Post-condition: Ensure DD/Par MP columns were NOT created here (they should be created by specialized functions)
+        assert 'MP_DD_Score_NS' not in self.df.columns, "_compute_comprehensive_matchpoints: Incorrectly created 'MP_DD_Score_NS' (should only be created by _convert_dd_scores_to_percentages)"
+        assert 'MP_DD_Score_EW' not in self.df.columns, "_compute_comprehensive_matchpoints: Incorrectly created 'MP_DD_Score_EW' (should only be created by _convert_dd_scores_to_percentages)"
+        assert 'MP_Par_NS' not in self.df.columns, "_compute_comprehensive_matchpoints: Incorrectly created 'MP_Par_NS' (should only be created by _convert_par_scores_to_percentages)"
+        assert 'MP_Par_EW' not in self.df.columns, "_compute_comprehensive_matchpoints: Incorrectly created 'MP_Par_EW' (should only be created by _convert_par_scores_to_percentages)"
 
     def _compute_mp_percentage_from_score(self, col: str) -> pl.Series:
         """Calculate matchpoint percentage from MP column."""
@@ -6103,22 +6107,52 @@ class MatchPointAugmenter:
 
     def _convert_dd_scores_to_percentages(self) -> None:
         """Delegate to global DD score percentage computation."""
+        # Pre-conditions: Check required inputs exist
+        assert 'Score_NS' in self.df.columns, "_convert_dd_scores_to_percentages: Missing required input 'Score_NS'"
+        assert 'Score_EW' in self.df.columns, "_convert_dd_scores_to_percentages: Missing required input 'Score_EW'"
+        assert 'DD_Score_NS' in self.df.columns, "_convert_dd_scores_to_percentages: Missing required input 'DD_Score_NS'"
+        assert 'DD_Score_EW' in self.df.columns, "_convert_dd_scores_to_percentages: Missing required input 'DD_Score_EW'"
+        
+        # Pre-conditions: Check outputs don't already exist (prevents duplicate computation)
+        assert 'MP_DD_Score_NS' not in self.df.columns, "_convert_dd_scores_to_percentages: Output 'MP_DD_Score_NS' already exists (duplicate computation)"
+        assert 'MP_DD_Score_EW' not in self.df.columns, "_convert_dd_scores_to_percentages: Output 'MP_DD_Score_EW' already exists (duplicate computation)"
+        assert 'DD_Score_Pct_NS' not in self.df.columns, "_convert_dd_scores_to_percentages: Output 'DD_Score_Pct_NS' already exists (duplicate computation)"
+        assert 'DD_Score_Pct_EW' not in self.df.columns, "_convert_dd_scores_to_percentages: Output 'DD_Score_Pct_EW' already exists (duplicate computation)"
+        
         self.df = self._time_operation(
             "DD score percentages",
             compute_dd_score_percentages,
             self.df,
         )
+        
+        # Post-conditions: Verify outputs were created successfully
+        assert 'MP_DD_Score_NS' in self.df.columns, "_convert_dd_scores_to_percentages: Failed to create output 'MP_DD_Score_NS'"
+        assert 'MP_DD_Score_EW' in self.df.columns, "_convert_dd_scores_to_percentages: Failed to create output 'MP_DD_Score_EW'"
+        assert 'DD_Score_Pct_NS' in self.df.columns, "_convert_dd_scores_to_percentages: Failed to create output 'DD_Score_Pct_NS'"
+        assert 'DD_Score_Pct_EW' in self.df.columns, "_convert_dd_scores_to_percentages: Failed to create output 'DD_Score_Pct_EW'"
 
     def _convert_par_scores_to_percentages(self) -> None:
         """Delegate to global Par percentage computation."""
         # Check if Par columns exist before attempting computation
         required_par_cols = ['Par_NS', 'Par_EW']
         if all(col in self.df.columns for col in required_par_cols):
+            # Pre-conditions: Check outputs don't already exist (prevents duplicate computation)
+            assert 'MP_Par_NS' not in self.df.columns, "_convert_par_scores_to_percentages: Output 'MP_Par_NS' already exists (duplicate computation)"
+            assert 'MP_Par_EW' not in self.df.columns, "_convert_par_scores_to_percentages: Output 'MP_Par_EW' already exists (duplicate computation)"
+            assert 'Par_Pct_NS' not in self.df.columns, "_convert_par_scores_to_percentages: Output 'Par_Pct_NS' already exists (duplicate computation)"
+            assert 'Par_Pct_EW' not in self.df.columns, "_convert_par_scores_to_percentages: Output 'Par_Pct_EW' already exists (duplicate computation)"
+            
             self.df = self._time_operation(
                 "Par percentages",
                 compute_par_percentages,
                 self.df,
             )
+            
+            # Post-conditions: Verify outputs were created successfully
+            assert 'MP_Par_NS' in self.df.columns, "_convert_par_scores_to_percentages: Failed to create output 'MP_Par_NS'"
+            assert 'MP_Par_EW' in self.df.columns, "_convert_par_scores_to_percentages: Failed to create output 'MP_Par_EW'"
+            assert 'Par_Pct_NS' in self.df.columns, "_convert_par_scores_to_percentages: Failed to create output 'Par_Pct_NS'"
+            assert 'Par_Pct_EW' in self.df.columns, "_convert_par_scores_to_percentages: Failed to create output 'Par_Pct_EW'"
         else:
             logger.warning("Skipping Par percentage computation - Par columns not found (ParScore likely missing from DD analysis)")
 

@@ -219,7 +219,9 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast('cuda', enabled=use_amp and device_t.type == 'cuda'):
             pred = model(xb_cont, xb_cat).squeeze(-1)
-            if y_range is not None:
+            # No need to clamp if model uses sigmoid - it already applies bounds
+            # Only clamp for models without sigmoid that still need range constraints
+            if y_range is not None and not getattr(model, 'use_sigmoid', False):
                 pred = pred.clamp(*y_range)
             mask = torch.isfinite(pred) & torch.isfinite(yb)
             if not mask.any():
@@ -257,7 +259,8 @@ def eval_one_epoch(
             xb_cat = xb_cat.to(device_t, non_blocking=True) if xb_cat is not None else None
             yb = yb.to(device_t, non_blocking=True)
             pred = model(xb_cont, xb_cat).squeeze(-1)
-            if y_range is not None:
+            # No need to clamp if model uses sigmoid - it already applies bounds
+            if y_range is not None and not getattr(model, 'use_sigmoid', False):
                 pred = pred.clamp(*y_range)
             mask = torch.isfinite(pred) & torch.isfinite(yb)
             if not mask.any():
@@ -286,7 +289,8 @@ def eval_one_epoch_with_stats(
             xb_cat = xb_cat.to(device_t, non_blocking=True) if xb_cat is not None else None
             yb = yb.to(device_t, non_blocking=True)
             pred = model(xb_cont, xb_cat).squeeze(-1)
-            if y_range is not None:
+            # No need to clamp if model uses sigmoid - it already applies bounds
+            if y_range is not None and not getattr(model, 'use_sigmoid', False):
                 pred = pred.clamp(*y_range)
             mask = torch.isfinite(pred) & torch.isfinite(yb)
             if not mask.any():
@@ -367,7 +371,8 @@ def predict_batches(
             xb_cat = xb_cat.to(device_t, non_blocking=True) if xb_cat is not None else None
             with torch.amp.autocast('cuda', enabled=use_amp and device_t.type == 'cuda'):
                 batch_preds = model(xb_cont, xb_cat).squeeze(-1)
-                if y_range is not None:
+                # No need to clamp if model uses sigmoid - it already applies bounds
+                if y_range is not None and not getattr(model, 'use_sigmoid', False):
                     batch_preds = batch_preds.clamp(*y_range)
             preds.extend(batch_preds.cpu().tolist())
     return preds
@@ -775,7 +780,7 @@ class MLP(torch.nn.Module):
 
     Shared between training and inference functions to ensure consistency.
     """
-    def __init__(self, input_dim: int, cat_dims: Optional[List[Tuple[int, int]]] = None, layer_sizes: List[int] = [1024, 512, 256, 128], dropout: float = 0.1):
+    def __init__(self, input_dim: int, cat_dims: Optional[List[Tuple[int, int]]] = None, layer_sizes: List[int] = [1024, 512, 256, 128], dropout: float = 0.1, use_sigmoid: bool = False, y_range: Optional[Tuple[float, float]] = None):
         super().__init__()
 
         self.embeddings = torch.nn.ModuleList()
@@ -802,6 +807,10 @@ class MLP(torch.nn.Module):
         # Output layer (no activation - raw logits for regression)
         layers.append(torch.nn.Linear(prev_size, 1))
         self.layers = torch.nn.Sequential(*layers)
+        
+        # Store activation config
+        self.use_sigmoid = use_sigmoid
+        self.y_range = y_range
 
     def forward(self, x_cont, x_cat=None):
         # Process categorical features through embeddings if they exist
@@ -813,7 +822,16 @@ class MLP(torch.nn.Module):
         else:
             x = x_cont # No categorical features or no embeddings defined
 
-        return self.layers(x).squeeze(-1)  # Remove last dimension for scalar output
+        output = self.layers(x).squeeze(-1)  # Remove last dimension for scalar output
+        
+        # Apply sigmoid if configured for bounded regression
+        if self.use_sigmoid:
+            output = torch.sigmoid(output)
+            if self.y_range is not None:
+                y_min, y_max = self.y_range
+                output = output * (y_max - y_min) + y_min
+        
+        return output
 
 
 def compute_scaling_parameters(df: pl.DataFrame, apply_scaling: bool = True, verbose: bool = True) -> Dict[str, Dict[str, float]]:
@@ -1350,7 +1368,10 @@ def build_model_from_schema(schema: Dict[str, Any], input_dim: int, device: torc
     mlp_layers = schema.get('mlp_layers', [512, 256, 128])
     dropout = schema.get('mlp_dropout', 0.05)
     cat_dims = cat_dims_from_schema(schema)
-    model = MLP(input_dim=input_dim, cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout)
+    use_sigmoid = schema.get('use_sigmoid', False)
+    y_range_from_schema = schema.get('y_range', None)
+    y_range = tuple(y_range_from_schema) if y_range_from_schema else None
+    model = MLP(input_dim=input_dim, cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout, use_sigmoid=use_sigmoid, y_range=y_range)
     return model.to(device)
 
 
@@ -1478,6 +1499,7 @@ def generate_and_save_schema_core(
             r'.*name.*',           # Any column containing 'name' (case-insensitive)
             r'player_name_[nesw]', # Specific player name columns
             r'declarer_name',      # Declarer name column
+            r'^is_(train|val|test)_set$',  # Split indicator columns (metadata)
             # Add more regex patterns as needed:
             # r'^id$',             # Exact match for 'id' column
             # r'.*_id$',           # Any column ending with '_id'
@@ -1590,6 +1612,7 @@ def generate_and_save_schema_core(
         "scaling_params": scaling_params,
         "apply_scaling": apply_scaling_parameters,
         "y_range": list(y_range) if y_range is not None else None,
+        "use_sigmoid": (y_range is not None),  # Use sigmoid activation for bounded regression
         "cat_feature_info": cat_feature_info,
         "numerical_feature_cols": numerical_feature_cols,
         "categorical_feature_cols": categorical_feature_cols,
@@ -1863,7 +1886,9 @@ def _train_model_core(
         # Reserve an extra index for unknowns in embeddings
         cat_dims = [(cardinality + 1, min(50, cardinality // 2)) for cardinality in cat_feature_info.values()]
 
-    model = MLP(input_dim=input_dim, cat_dims=cat_dims, layer_sizes=layers, dropout=dropout).to(device_t)
+    # Use sigmoid activation for bounded regression tasks
+    use_sigmoid = (y_range is not None)
+    model = MLP(input_dim=input_dim, cat_dims=cat_dims, layer_sizes=layers, dropout=dropout, use_sigmoid=use_sigmoid, y_range=y_range).to(device_t)
     # Use SGD for CPU to avoid AdamW CUDA context issues
     if device_t.type == 'cpu':
         opt = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
@@ -3795,11 +3820,14 @@ def predict_regression_model(saved_models_path: pathlib.Path, model_name: str, d
     # Build model: input_dim is continuous-only; embeddings added inside the model
     mlp_layers = schema.get('mlp_layers', [1024, 512, 256, 128])
     dropout = schema.get('mlp_dropout', 0.1)
+    use_sigmoid = schema.get('use_sigmoid', False)
+    y_range_from_schema = schema.get('y_range', None)
+    y_range_tuple = tuple(y_range_from_schema) if y_range_from_schema else None
     
     print(f"DEBUG: Model architecture - input_dim: {int(Xc.shape[1])}, cat_dims: {cat_dims}")
-    print(f"DEBUG: MLP layers: {mlp_layers}, dropout: {dropout}")
+    print(f"DEBUG: MLP layers: {mlp_layers}, dropout: {dropout}, use_sigmoid: {use_sigmoid}")
     
-    model = MLP(input_dim=int(Xc.shape[1]), cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout)
+    model = MLP(input_dim=int(Xc.shape[1]), cat_dims=cat_dims, layer_sizes=mlp_layers, dropout=dropout, use_sigmoid=use_sigmoid, y_range=y_range_tuple)
     
     # Check model state before loading
     print(f"DEBUG: Model created, loading state dict with {len(state_dict)} parameters")
