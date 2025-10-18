@@ -210,7 +210,7 @@ def convert_ffdf_api_to_mldf(ffldfs):
     elif sd_df['Pair_Direction'].eq('EW').all():
         pair_direction = 'EW'
     else:
-        raise ValueError(f"Invalid Pair_Direction: {df['Pair_Direction'].unique()}")
+        raise ValueError(f"Invalid Pair_Direction: {sd_df['Pair_Direction'].unique()}. Howell movements are not implemented. Try a different game.")
 
     # df = ffldfs['simultaneous_roadsheets']
 
@@ -266,7 +266,7 @@ def convert_ffdf_api_to_mldf(ffldfs):
             pl.col('note_eo').alias('roadsheets_deals_teamAvgNote'),
         ]).drop('note_eo')
     else:
-        raise ValueError(f"Invalid Pair_Direction: {df['Pair_Direction'].unique()}")
+        raise ValueError(f"Invalid Pair_Direction: {sd_df['Pair_Direction'].unique()}")
     simultaneous_description_by_organization_id_df = simultaneous_description_by_organization_id_df.with_columns([
         pl.col('team_ns_id').alias('Pair_Number_NS'),
     ]).drop('team_ns_id')
@@ -400,7 +400,7 @@ def convert_ffdf_api_to_mldf(ffldfs):
                 .alias('Score_NS'),
         ])
     else:
-        raise ValueError(f"Invalid Pair_Direction: {df['Pair_Direction'].unique()}")
+        raise ValueError(f"Invalid Pair_Direction: {sd_df['Pair_Direction'].unique()}")
     
     # Ignoring existing simultaneous MP_Top column. Use window function over Board count to calculate MP_Top.
     # Could have issues with director adjustments.

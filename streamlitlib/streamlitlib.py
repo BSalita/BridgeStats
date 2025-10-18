@@ -351,6 +351,68 @@ def markdown_to_paragraphs(md_string, styles):
     return paragraphs
 
 
+def wrap_column_name(column_name, max_length=12):
+    """
+    Wrap long column names by inserting line breaks.
+    
+    Args:
+        column_name: The column name to wrap
+        max_length: Maximum length before wrapping
+        
+    Returns:
+        Column name with line breaks inserted
+    """
+    if len(column_name) <= max_length:
+        return column_name
+    
+    # Try to find good break points
+    words = column_name.replace('_', ' ').split()
+    if len(words) > 1:
+        # Multi-word: try to break at word boundaries
+        result = []
+        current_line = []
+        current_length = 0
+        
+        for word in words:
+            if current_length + len(word) + len(current_line) > max_length and current_line:
+                result.append(' '.join(current_line))
+                current_line = [word]
+                current_length = len(word)
+            else:
+                current_line.append(word)
+                current_length += len(word)
+        
+        if current_line:
+            result.append(' '.join(current_line))
+        
+        return '\n'.join(result)
+    else:
+        # Single word: break at reasonable points
+        if '_' in column_name:
+            # Break at underscores
+            parts = column_name.split('_')
+            result = []
+            current_line = []
+            current_length = 0
+            
+            for part in parts:
+                if current_length + len(part) + len(current_line) > max_length and current_line:
+                    result.append('_'.join(current_line))
+                    current_line = [part]
+                    current_length = len(part)
+                else:
+                    current_line.append(part)
+                    current_length += len(part)
+            
+            if current_line:
+                result.append('_'.join(current_line))
+            
+            return '\n'.join(result)
+        else:
+            # No good break points, just break at max_length
+            return column_name[:max_length] + '\n' + column_name[max_length:]
+
+
 def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = None, shrink_to_fit: bool = False):
     # Convert DataFrame to HTML
 
@@ -366,10 +428,16 @@ def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = N
     # Parse HTML to extract table data
     soup = BeautifulSoup(html_content, 'html.parser')
     table_data = []
-    for row in soup.table.findAll('tr'):
+    for row_idx, row in enumerate(soup.table.findAll('tr')):
         row_data = []
         for cell in row.findAll(['td', 'th']):
-            row_data.append(cell.get_text())
+            cell_text = cell.get_text()
+            # Apply column name wrapping to header row (first row) when shrink_to_fit is enabled
+            if row_idx == 0 and shrink_to_fit:
+                # Use shorter max_length for narrower columns
+                max_len = 8
+                cell_text = wrap_column_name(cell_text, max_length=max_len)
+            row_data.append(cell_text)
         table_data.append(row_data)
     
     # Create reportlab table with auto-sizing if requested
@@ -377,7 +445,7 @@ def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = N
         # Calculate available width (landscape letter minus margins)
         from reportlab.lib.pagesizes import landscape, letter
         page_width = landscape(letter)[0]
-        available_width = page_width - 72  # 1 inch margins on each side
+        available_width = page_width - 36  # 0.25 inch margins on each side (18*2=36)
         
         # Estimate column widths based on content
         col_count = len(table_data[0])
@@ -420,6 +488,9 @@ def dataframe_to_table(df, max_rows: int | None = None, max_cols: int | None = N
         ('GRID', (0, 0), (-1, -1), 1, '#D5D5D5'),
         ('FONTSIZE', (0, 0), (-1, -1), font_size),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Align text to top of cells
+        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),  # Center-align header text vertically
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),  # Center-align header text horizontally
+        ('ALIGN', (0, 1), (-1, -1), 'RIGHT'),  # Right-align data cells
     ]
 
     # Alternate row colors for even and odd rows
@@ -438,7 +509,10 @@ def create_pdf(pdf_assets, title, output_filename=None, max_rows: int | None = N
     buffer = BytesIO()
     
     # Create a new document with the buffer as the destination
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    # Reduce margins to 0.25 inch (18 points) on all sides for more printable area
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), 
+                          leftMargin=18, rightMargin=18, 
+                          topMargin=18, bottomMargin=18)
     doc.title = title
 
     # Create a list to hold the document's contents
