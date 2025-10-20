@@ -238,7 +238,14 @@ def ShowDataFrameTable(table_df,key=None,output_method='aggrid',color_column=Non
         #gb.configure_pagination(paginationAutoPageSize=True) #Add pagination
         #gb.configure_side_bar() #Add a sidebar
         #gb.configure_selection('multiple', use_checkbox=True, groupSelectsChildren="Group checkbox select children") #Enable multi-row selection
+        gb.configure_selection(selection_mode='single', use_checkbox=False)  # Enable single row selection
         gb.configure_default_column(cellStyle={'color': 'black', 'font-size': '12px'}, suppressMenu=True, wrapHeaderText=True, autoHeaderHeight=True)
+        
+        # Configure numeric columns for proper sorting
+        for col in table_df.columns:
+            if pd.api.types.is_numeric_dtype(table_df[col]):
+                gb.configure_column(col, type=['numericColumn'], filter='agNumberColumnFilter')
+        
         # some streamlit custom_css examples: https://discuss.streamlit.io/t/how-to-use-custom-css-in-ag-grid-tables/26743
         # patch - 17-Aug-2023 - added - #gridToolBar to fix missing horizontal scrollbar. https://discuss.streamlit.io/t/st-aggrid-horizontal-scroll-bar-disappears-when-i-define-a-height/46217/10?u=bsalita
         # Define column tooltips

@@ -3380,8 +3380,8 @@ def compute_pair_matchpoint_elo_ratings(
     out_df = pl.DataFrame({
         "Elo_R_NS_Before": r_ns_before_final,
         "Elo_R_EW_Before": r_ew_before_final,
-        "Elo_E_Pair_NS": e_ns_arr,
-        "Elo_E_Pair_EW": e_ew_arr,
+        "Elo_E_NS": e_ns_arr,
+        "Elo_E_EW": e_ew_arr,
         "Elo_R_NS": r_ns_final,
         "Elo_R_EW": r_ew_final,
         "Elo_N_NS": n_ns_arr,
@@ -3433,7 +3433,7 @@ def compute_player_matchpoint_elo_ratings(
 
     Output columns:
     - `Elo_R_N_Before`, `Elo_R_S_Before`, `Elo_R_E_Before`, `Elo_R_W_Before`: Pre-game ratings (pl.Float32, None if Elo_N < minimum_sessions)
-    - `Elo_E_Players_NS`, `Elo_E_Players_EW`: Expected scores from pre-board partnership ratings (pl.Float32)
+    - `Elo_E_NS`, `Elo_E_EW`: Expected scores from pre-board partnership ratings (pl.Float32)
     - `Elo_R_N`, `Elo_R_S`, `Elo_R_E`, `Elo_R_W`: Post-game ratings (pl.Float32, None if Elo_N < minimum_sessions)  
     - `Elo_N_N`, `Elo_N_S`, `Elo_N_E`, `Elo_N_W`: Session counts per player (pl.Int32)
     
@@ -3623,8 +3623,8 @@ def compute_player_matchpoint_elo_ratings(
         "Elo_R_E_Before": R_E_before_final,
         "Elo_R_S_Before": R_S_before_final,
         "Elo_R_W_Before": R_W_before_final,
-        "Elo_E_Players_NS": E_NS,
-        "Elo_E_Players_EW": E_EW,
+        "Elo_E_NS": E_NS,
+        "Elo_E_EW": E_EW,
         "Elo_R_N": R_N_final,
         "Elo_R_E": R_E_final,
         "Elo_R_S": R_S_final,
@@ -3659,10 +3659,10 @@ def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame
     - `session_id`: session identifier
 
     Output columns:
-    - `Elo_R_Player_{N|S|E|W}_EventStart`: Player rating at session start (pl.Float32)
-    - `Elo_R_Player_{N|S|E|W}_EventEnd`: Player rating at session end (pl.Float32)
-    - `Elo_R_Pair_{NS|EW}_EventStart`: Pair rating at session start (pl.Float32)
-    - `Elo_R_Pair_{NS|EW}_EventEnd`: Pair rating at session end (pl.Float32)
+    - `Elo_R_{N|S|E|W}_EventStart`: Player rating at session start (pl.Float32)
+    - `Elo_R_{N|S|E|W}_EventEnd`: Player rating at session end (pl.Float32)
+    - `Elo_R_{NS|EW}_EventStart`: Pair rating at session start (pl.Float32)
+    - `Elo_R_{NS|EW}_EventEnd`: Pair rating at session end (pl.Float32)
 
     Returns:
     - DataFrame with added event-level Elo columns propagated across all session boards
@@ -3671,10 +3671,10 @@ def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame
 
     # Player start
     seat_before_cols = {
-        "N": ("Player_ID_N", "Elo_R_N_Before", "Elo_R_Player_N_EventStart"),
-        "S": ("Player_ID_S", "Elo_R_S_Before", "Elo_R_Player_S_EventStart"),
-        "E": ("Player_ID_E", "Elo_R_E_Before", "Elo_R_Player_E_EventStart"),
-        "W": ("Player_ID_W", "Elo_R_W_Before", "Elo_R_Player_W_EventStart"),
+        "N": ("Player_ID_N", "Elo_R_N_Before", "Elo_R_N_EventStart"),
+        "S": ("Player_ID_S", "Elo_R_S_Before", "Elo_R_S_EventStart"),
+        "E": ("Player_ID_E", "Elo_R_E_Before", "Elo_R_E_EventStart"),
+        "W": ("Player_ID_W", "Elo_R_W_Before", "Elo_R_W_EventStart"),
     }
     for _, (pid_col, before_col, out_col) in seat_before_cols.items():
         if pid_col in df_sorted.columns and before_col in df_sorted.columns:
@@ -3684,8 +3684,8 @@ def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame
 
     # Pair start
     pair_before_cols = {
-        "NS": ("Pair_Number_NS", "Elo_R_NS_Before", "Elo_R_Pair_NS_EventStart"),
-        "EW": ("Pair_Number_EW", "Elo_R_EW_Before", "Elo_R_Pair_EW_EventStart"),
+        "NS": ("Pair_Number_NS", "Elo_R_NS_Before", "Elo_R_NS_EventStart"),
+        "EW": ("Pair_Number_EW", "Elo_R_EW_Before", "Elo_R_EW_EventStart"),
     }
     for _, (pair_col, before_col, out_col) in pair_before_cols.items():
         if pair_col in df_sorted.columns and before_col in df_sorted.columns:
@@ -3695,10 +3695,10 @@ def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame
 
     # Player end
     seat_after_cols = {
-        "N": ("Player_ID_N", "Elo_R_N", "Elo_R_Player_N_EventEnd"),
-        "S": ("Player_ID_S", "Elo_R_S", "Elo_R_Player_S_EventEnd"),
-        "E": ("Player_ID_E", "Elo_R_E", "Elo_R_Player_E_EventEnd"),
-        "W": ("Player_ID_W", "Elo_R_W", "Elo_R_Player_W_EventEnd"),
+        "N": ("Player_ID_N", "Elo_R_N", "Elo_R_N_EventEnd"),
+        "S": ("Player_ID_S", "Elo_R_S", "Elo_R_S_EventEnd"),
+        "E": ("Player_ID_E", "Elo_R_E", "Elo_R_E_EventEnd"),
+        "W": ("Player_ID_W", "Elo_R_W", "Elo_R_W_EventEnd"),
     }
     for _, (pid_col, after_col, out_col) in seat_after_cols.items():
         if pid_col in df_sorted.columns and after_col in df_sorted.columns:
@@ -3708,8 +3708,8 @@ def compute_event_start_end_elo_columns(df_sorted: pl.DataFrame) -> pl.DataFrame
 
     # Pair end
     pair_after_cols = {
-        "NS": ("Pair_Number_NS", "Elo_R_NS", "Elo_R_Pair_NS_EventEnd"),
-        "EW": ("Pair_Number_EW", "Elo_R_EW", "Elo_R_Pair_EW_EventEnd"),
+        "NS": ("Pair_Number_NS", "Elo_R_NS", "Elo_R_NS_EventEnd"),
+        "EW": ("Pair_Number_EW", "Elo_R_EW", "Elo_R_EW_EventEnd"),
     }
     for _, (pair_col, after_col, out_col) in pair_after_cols.items():
         if pair_col in df_sorted.columns and after_col in df_sorted.columns:
@@ -3757,22 +3757,22 @@ def compute_matchpoint_elo_ratings(
     
     From compute_pair_matchpoint_elo_ratings():
     - `Elo_R_NS_Before`, `Elo_R_EW_Before`: Pair ratings before the board (pl.Float32, None if < minimum_sessions)
-    - `Elo_E_Pair_NS`, `Elo_E_Pair_EW`: Expected scores based on pair rating difference (pl.Float32)
+    - `Elo_E_NS`, `Elo_E_EW`: Expected scores based on pair rating difference (pl.Float32)
     - `Elo_R_NS`, `Elo_R_EW`: Pair ratings after the board (pl.Float32, None if < minimum_sessions)
     - `Elo_N_NS`, `Elo_N_EW`: Number of sessions played by each pair (pl.Int32)
     - `Elo_Delta_Before`, `Elo_Delta_After`: Rating differences NS minus EW (pl.Float32)
     
     From compute_player_matchpoint_elo_ratings():
     - `Elo_R_N_Before`, `Elo_R_S_Before`, `Elo_R_E_Before`, `Elo_R_W_Before`: Player ratings before the board (pl.Float32, None if < minimum_sessions)
-    - `Elo_E_Players_NS`, `Elo_E_Players_EW`: Expected scores from partnership ratings (pl.Float32)
+    - `Elo_E_NS`, `Elo_E_EW`: Expected scores from partnership ratings (pl.Float32)
     - `Elo_R_N`, `Elo_R_S`, `Elo_R_E`, `Elo_R_W`: Player ratings after the board (pl.Float32, None if < minimum_sessions)
     - `Elo_N_N`, `Elo_N_S`, `Elo_N_E`, `Elo_N_W`: Number of sessions played by each player (pl.Int32)
     
     From compute_event_start_end_elo_columns():
-    - `Elo_R_Player_N_EventStart`, `Elo_R_Player_S_EventStart`, `Elo_R_Player_E_EventStart`, `Elo_R_Player_W_EventStart`: Player ratings at session start (pl.Float32)
-    - `Elo_R_Player_N_EventEnd`, `Elo_R_Player_S_EventEnd`, `Elo_R_Player_E_EventEnd`, `Elo_R_Player_W_EventEnd`: Player ratings at session end (pl.Float32)
-    - `Elo_R_Pair_NS_EventStart`, `Elo_R_Pair_EW_EventStart`: Pair ratings at session start (pl.Float32)
-    - `Elo_R_Pair_NS_EventEnd`, `Elo_R_Pair_EW_EventEnd`: Pair ratings at session end (pl.Float32)
+    - `Elo_R_N_EventStart`, `Elo_R_S_EventStart`, `Elo_R_E_EventStart`, `Elo_R_W_EventStart`: Player ratings at session start (pl.Float32)
+    - `Elo_R_N_EventEnd`, `Elo_R_S_EventEnd`, `Elo_R_E_EventEnd`, `Elo_R_W_EventEnd`: Player ratings at session end (pl.Float32)
+    - `Elo_R_NS_EventStart`, `Elo_R_EW_EventStart`: Pair ratings at session start (pl.Float32)
+    - `Elo_R_NS_EventEnd`, `Elo_R_EW_EventEnd`: Pair ratings at session end (pl.Float32)
 
     Returns:
     - Polars DataFrame with added matchpoint Elo rating columns (36 total columns: 10 pair + 14 player + 12 event-level)
@@ -6077,18 +6077,18 @@ class MatchPointAugmenter:
         self.df = self._time_operation("calculate event start end Elo columns", compute_event_start_end_elo_columns, self.df)
         
         # Assert columns were created
-        assert 'Elo_R_Player_N_EventStart' in self.df.columns, "Column 'Elo_R_Player_N_EventStart' was not created"
-        assert 'Elo_R_Player_S_EventStart' in self.df.columns, "Column 'Elo_R_Player_S_EventStart' was not created"
-        assert 'Elo_R_Player_E_EventStart' in self.df.columns, "Column 'Elo_R_Player_E_EventStart' was not created"
-        assert 'Elo_R_Player_W_EventStart' in self.df.columns, "Column 'Elo_R_Player_W_EventStart' was not created"
-        assert 'Elo_R_Player_N_EventEnd' in self.df.columns, "Column 'Elo_R_Player_N_EventEnd' was not created"
-        assert 'Elo_R_Player_S_EventEnd' in self.df.columns, "Column 'Elo_R_Player_S_EventEnd' was not created"
-        assert 'Elo_R_Player_E_EventEnd' in self.df.columns, "Column 'Elo_R_Player_E_EventEnd' was not created"
-        assert 'Elo_R_Player_W_EventEnd' in self.df.columns, "Column 'Elo_R_Player_W_EventEnd' was not created"
-        assert 'Elo_R_Pair_NS_EventStart' in self.df.columns, "Column 'Elo_R_Pair_NS_EventStart' was not created"
-        assert 'Elo_R_Pair_EW_EventStart' in self.df.columns, "Column 'Elo_R_Pair_EW_EventStart' was not created"
-        assert 'Elo_R_Pair_NS_EventEnd' in self.df.columns, "Column 'Elo_R_Pair_NS_EventEnd' was not created"
-        assert 'Elo_R_Pair_EW_EventEnd' in self.df.columns, "Column 'Elo_R_Pair_EW_EventEnd' was not created"
+        assert 'Elo_R_N_EventStart' in self.df.columns, "Column 'Elo_R_N_EventStart' was not created"
+        assert 'Elo_R_S_EventStart' in self.df.columns, "Column 'Elo_R_S_EventStart' was not created"
+        assert 'Elo_R_E_EventStart' in self.df.columns, "Column 'Elo_R_E_EventStart' was not created"
+        assert 'Elo_R_W_EventStart' in self.df.columns, "Column 'Elo_R_W_EventStart' was not created"
+        assert 'Elo_R_N_EventEnd' in self.df.columns, "Column 'Elo_R_N_EventEnd' was not created"
+        assert 'Elo_R_S_EventEnd' in self.df.columns, "Column 'Elo_R_S_EventEnd' was not created"
+        assert 'Elo_R_E_EventEnd' in self.df.columns, "Column 'Elo_R_E_EventEnd' was not created"
+        assert 'Elo_R_W_EventEnd' in self.df.columns, "Column 'Elo_R_W_EventEnd' was not created"
+        assert 'Elo_R_NS_EventStart' in self.df.columns, "Column 'Elo_R_NS_EventStart' was not created"
+        assert 'Elo_R_EW_EventStart' in self.df.columns, "Column 'Elo_R_EW_EventStart' was not created"
+        assert 'Elo_R_NS_EventEnd' in self.df.columns, "Column 'Elo_R_NS_EventEnd' was not created"
+        assert 'Elo_R_EW_EventEnd' in self.df.columns, "Column 'Elo_R_EW_EventEnd' was not created"
 
     def _finalize_all_scoring_metrics(self) -> None:
         """Calculate final scores and percentages using optimized vectorized operations."""
