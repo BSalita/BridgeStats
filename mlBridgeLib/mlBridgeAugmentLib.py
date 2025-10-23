@@ -4919,8 +4919,9 @@ class DealAugmenter:
             operations.append(pl.lit(0).alias('group_id'))
         if 'session_id' not in self.df.columns:
             operations.append(pl.lit(0).alias('session_id'))
-        if 'section_name' not in self.df.columns:
-            operations.append(pl.lit('').alias('section_name'))
+        # section_name removed from hrs df because it conflicts with true section_name from brs. brs does not have global_id or session_id so no conflict.
+        # if 'section_name' not in self.df.columns:
+        #    operations.append(pl.lit('').alias('section_name'))
         
         if operations:
             self.df = self._time_operation("initialize required columns", lambda df: df.with_columns(operations), self.df)
@@ -4928,7 +4929,7 @@ class DealAugmenter:
         # Assert columns were created
         assert 'group_id' in self.df.columns, "Column 'group_id' was not created"
         assert 'session_id' in self.df.columns, "Column 'session_id' was not created"
-        assert 'section_name' in self.df.columns, "Column 'section_name' was not created"
+        # assert 'section_name' in self.df.columns, "Column 'section_name' was not created"
 
     def _add_dealer_column(self) -> None:
         # Assert required columns exist
