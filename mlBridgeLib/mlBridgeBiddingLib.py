@@ -12,7 +12,7 @@ import time
 
 
 # created and maintained by ChatGpt 4.0o on 22-Jun-2024
-class ExpressionEvaluator:
+class CriteriaEvaluator:
     """A class to parse and evaluate mathematical/logical expressions."""
     
     def __init__(self):
@@ -58,6 +58,18 @@ class ExpressionEvaluator:
         self.next_bidding_seat_d = {'N': 'E', 'E': 'S', 'S': 'W', 'W': 'N'}
 
         self.incomplete_rules = set()
+
+        # Initialize attributes for storing criteria and expressions
+        self.criteria_expressions_infix_l = []
+        self.criteria_variables_infix_sym_to_index_d = {}
+        self.criteria_variables_infix_index_to_sym_d = {}
+        self.metric_col_d = defaultdict(list)
+        self.bt_index_to_metric_col_d = {}
+        self.bt_index_to_criteria_exprs_d = {}
+        self.bt_index_to_criteria_cols_d = {}
+        self.directional_exprs_cols_d = {}
+        self.directional_variable_cols_d = {}
+        self.regex_col_names_d = {}
     
 
     def handle_chained_comparison(self, tokens):
@@ -121,17 +133,57 @@ class ExpressionEvaluator:
         return expr
 
 
-    def create_parsing_logic(self, infix_expressions_d):
+    def extract_variables(self, criteria_l):
+        variables = set()
+        for expr in criteria_l:
+            variables.update(re.findall(r'\b[a-zA-Z_]\w*\b', expr))
+        return list(variables)
+
+
+    def create_parsing_logic(self, criteria_l):
         """Create parsing logic for a list of infix expressions."""
-        variables = self.extract_variables(infix_expressions_d)
+        variables = self.extract_variables(criteria_l)
         postfix_expressions = []
         
-        for expr in infix_expressions_d:
+        for expr in criteria_l:
             tokens = re.findall(self.token_pattern, expr)
             postfix_expr = self.infix_to_postfix(tokens)
             postfix_expressions.append(postfix_expr)
         
         return variables, postfix_expressions # do not sort. leave in input order.
+
+    def evaluate_expression_in_bt(self, eval_dfs, variables, postfix_expressions):
+        """
+        Evaluate parsed postfix expressions for each direction and return:
+          - exprs_df: a single DataFrame containing all directional expression columns
+          - exprs_dfs_d: a dict mapping each direction ('N','E','S','W') to its own DataFrame
+
+        Args:
+            eval_dfs (Dict[str, pl.DataFrame]): mapping of direction -> DataFrame with variable columns
+            variables (List[str]): list of variable names extracted from criteria
+            postfix_expressions (List[Tuple[str,...]]): postfix token tuples for each expression
+
+        Returns:
+            Tuple[pl.DataFrame, Dict[str, pl.DataFrame]]
+        """
+        # Build mapping from postfix expression -> index (zfilled to 3 in downstream)
+        postfix_expressions_d = {postfix_expressions[i]: i for i in range(len(postfix_expressions))}
+
+        # Evaluate per direction and prefix result columns with direction (e.g., 'N_expr_000')
+        exprs_dfs_d = {}
+        for d in 'NESW':
+            if d not in eval_dfs:
+                raise KeyError(f"Missing eval DataFrame for direction '{d}'")
+            df = eval_dfs[d]
+            exprs_dfs_d[d] = self.evaluate_expressions_with_dataframe(
+                df,
+                postfix_expressions_d,
+                column_prefix=f"{d}_",
+            )
+
+        # Concatenate per-direction results horizontally to create a unified DataFrame
+        exprs_df = pl.concat([exprs_dfs_d[d] for d in 'NESW'], how='horizontal')
+        return exprs_df, exprs_dfs_d
 
 
     def evaluate_postfix_vectorized(self, postfix_expr, df):
@@ -177,67 +229,6 @@ class ExpressionEvaluator:
         return results
 
 
-    def create_bidding_table_boolean_columns(self, exprs_df, infix_expressions_d, bbo_bidding_table_position_d):
-        assert len(bbo_bidding_table_position_d) == 4
-        bt_bidding_col_results = {}
-        for direction in 'NESW':
-            direction = direction[0] # untuple dealer
-            cached_bt0_hits = 0
-            cached_binop_hits = 0
-            empty_eval_exprs = 0
-            binop_cache_d = {}
-            for pos,bts in bbo_bidding_table_position_d.items():
-                for bt0,bt in enumerate(bts):
-                    bt0 = bt[0]
-                    bt_exprs = bt[4]
-                    eval_expr_cols = [f'{direction}_expr_{str(infix_expressions_d[e]).zfill(3)}' for e in bt_exprs]
-                    if bt0 % 100000 == 0:
-                        print(direction,pos,bt0,bt)
-                        print(bt_exprs)
-                        print(eval_expr_cols)
-                    bid = '_'.join([direction,'bt',str(bt0)])
-                    if eval_expr_cols:
-                        if bid in bt_bidding_col_results:
-                            cached_bt0_hits += 1
-                        else:
-                            cache_k_ith = eval_expr_cols[0]
-                            if cache_k_ith in binop_cache_d:
-                                cached_binop_hits += 1
-                            else:
-                                # Convert to boolean type explicitly
-                                binop_cache_d[cache_k_ith] = exprs_df[cache_k_ith].cast(pl.Boolean)
-                            for last_row in eval_expr_cols[1:]:
-                                bid_k = cache_k_ith+'&'+last_row
-                                if bid_k in binop_cache_d:
-                                    cached_binop_hits += 1
-                                else:
-                                    # Convert both operands to boolean before AND operation
-                                    binop_cache_d[bid_k] = (binop_cache_d[cache_k_ith].cast(pl.Boolean) & 
-                                                        exprs_df[last_row].cast(pl.Boolean))
-                                cache_k_ith = bid_k
-                            bt_bidding_col_results[bid] = binop_cache_d[cache_k_ith].alias(bid)
-                    else:
-                        assert bid not in bt_bidding_col_results, bid
-                        empty_eval_exprs += 1
-            print(f"dealer:{direction} pos:{pos} cached binop columns:{len(binop_cache_d)} cache binop hits:{cached_binop_hits} cached bt0 hits:{cached_bt0_hits} empty eval exprs:{empty_eval_exprs}")
-            del binop_cache_d
-
-        return bt_bidding_col_results
-
-
-    def evaluate_expression_in_bt(self, eval_dfs, postfix_expressions_d):
-
-        exprs_dfs_d = {}
-        for direction, eval_df in eval_dfs.items():
-            #print(dealer,postfix_expressions)
-            #print(eval_df)
-            exprs_dfs_d[direction] = self.evaluate_expressions_with_dataframe(eval_df, postfix_expressions_d, direction+'_') # assumes all results are boolean or 0/1. Force bool for much greater performance.
-            assert exprs_dfs_d[direction].shape[0] == eval_df.shape[0]
-            #print(exprs_dfs_d[direction])
-        # creates a single dataframe containing all directions.
-        return exprs_dfs_d
-
-
     def create_eval_criteria(self, bbo_previous_bid_to_bt_entry_d):
         t = time.time()
         expressions_l = []
@@ -248,37 +239,6 @@ class ExpressionEvaluator:
         expressions = sorted(set(expressions_l))
         print(f"create_eval_criteria: done: time: {time.time()-t:.2f}") # 1s
         return expressions
-
-    
-    def compute_bidding_table_results(self, criteria_bt_results_d, bbo_previous_bid_to_bt_entry_d):
-        bt_cols_d = {}
-        for direction in 'NESW':
-            for k,v in tqdm.tqdm(bbo_previous_bid_to_bt_entry_d.items()):
-                #print(f"{k=} {v=}")
-                #if v[0] == 10000:
-                #    break
-                bt0 = v[0] # 0,1,...
-                d_bt_bt0 = '_'.join([direction,'bt',str(bt0)]) # 'N_bt_0'
-                if len(v[1]) <= 1:
-                    # opening bid. no prior bids. assign current criteria results.
-                    # all opening bids must be in criteria_bt_results_d -- but only when bidding table is completed (4N)
-                    if d_bt_bt0 in criteria_bt_results_d:
-                        bt_cols_d[d_bt_bt0] = criteria_bt_results_d[d_bt_bt0]
-                    else:
-                        # todo: temp code until all eval_exprs of [] are filled in with actual expressions. default is all Trues.
-                        bt_cols_d[d_bt_bt0] = True 
-                    continue
-                prior_bt0 = bbo_previous_bid_to_bt_entry_d[(v[1][:-1],(v[1][-1],))][0] # prior result index
-                prior_d_bt_bt0 = '_'.join([direction,'bt',str(prior_bt0)]) # prior result column name
-                if d_bt_bt0 not in criteria_bt_results_d:
-                    bt_cols_d[d_bt_bt0] = bt_cols_d[prior_d_bt_bt0] # no current criteria results. Treat as all True. ergo pass on prior results.
-                elif bt_cols_d[prior_d_bt_bt0] == True:
-                    bt_cols_d[d_bt_bt0] = criteria_bt_results_d[d_bt_bt0]
-                else:
-                    # could test for all False (sum==0) and take some resource saving shortcut.
-                    bt_cols_d[d_bt_bt0] = bt_cols_d[prior_d_bt_bt0]&criteria_bt_results_d[d_bt_bt0] # AND prior result with current criteria result.
-    
-        return bt_cols_d
 
 
     def create_directional_exprs_cols(self, criteria_variables_infix_index_to_sym_d):
@@ -319,49 +279,6 @@ class ExpressionEvaluator:
                     self.directional_exprs_cols_d[v] = var_name+' '+' '.join(splits_space[1:])
                     self.regex_col_names_d[directional_var_name] = var_name.replace('{d}','([NESW]_)?[CDHS]')
         return # self.regex_col_names_d, self.directional_variable_cols_d, self.directional_exprs_cols_d
-
-
-    def evaluate_expression(self, exprs, df):
-        """
-        Evaluate expression using asteval for all rows in the dataframe.
-        Only handles single comparisons or double comparisons with a variable in the middle.
-        
-        Args:
-            expr (str): Expression to evaluate (e.g. "10 <= HCP <= 20")
-            df (polars.DataFrame): DataFrame containing columns referenced in expr
-            
-        Returns:
-            polars.Series: defaultdict(list) with results of expression evaluation
-        """
-
-        #print(exprs)
-        #if len(exprs) == 0:
-        #    return [True]
-        
-        # Convert dataframe columns to numpy arrays for the symbol table
-        t = time.time()
-        value_dict = {col: df[col].to_numpy() for col in df.columns}
-        
-        # Create interpreter with the data in the symbol table
-        aeval = Interpreter(symtable=value_dict)
-        
-        expr_results_d = defaultdict(list)
-        for d in 'NESW':
-            for expr in tqdm.tqdm(exprs):
-
-                # Evaluate expression
-                try:
-                    result_array = aeval.eval(expr.replace('{d}',d))
-                    if result_array is None:
-                        raise ValueError(f"Expression evaluation returned None: {expr=}")
-                except Exception as e:
-                    #raise ValueError(f"Expression evaluation exception: {expr=} {e=}")
-                    print(f"Expression evaluation exception: {expr=} {e=}")
-                    continue
-                
-                expr_results_d[d].append(result_array)
-        print(f"evaluate_expression: time: {time.time()-t:.2f}") # 1s
-        return expr_results_d
 
 
     def create_bidding_expr_dicts(self, bt_prior_bids_to_bt_entry_d):
@@ -417,19 +334,219 @@ class ExpressionEvaluator:
         print(f"create_bidding_expr_dicts: done: time: {time.time()-t:.2f}") # 1s
 
         return
-    
 
+
+class ExpressionEvaluator:
+    """A class to evaluate bridge bidding expressions and create bidding tables."""
+    
+    def __init__(self):
+        # Initialize attributes for storing expression results
+        self.expr_results_d = {}
+        self.next_bidding_seat_d = {'N': 'E', 'E': 'S', 'S': 'W', 'W': 'N'}
+        self.incomplete_rules = set()
+        
+        # Initialize attributes that will be loaded from pickle files
+        # These are created by CriteriaEvaluator and loaded here
+        self.bt_index_to_criteria_cols_d = {}
+        self.directional_exprs_cols_d = {}
+        self.directional_variable_cols_d = {}
+        self.criteria_expressions_infix_l = []
+        self.criteria_variables_infix_sym_to_index_d = {}
+        self.criteria_variables_infix_index_to_sym_d = {}
+
+
+    def load_criteria_dicts(self, bt_index_to_metric_col_d, bt_index_to_criteria_exprs_d, 
+                           bt_index_to_criteria_cols_d, directional_variable_cols_d, 
+                           criteria_variables_infix_index_to_sym_d, directional_exprs_cols_d):
+        """Load the criteria dictionaries created by CriteriaEvaluator.
+        
+        These dictionaries are typically loaded from the bbo_criteria_d.pkl file
+        created by bbo_create_bidding_criteria_dicts.ipynb.
+        
+        Args:
+            bt_index_to_metric_col_d: Mapping of bt index to metric columns
+            bt_index_to_criteria_exprs_d: Mapping of bt index to criteria expressions  
+            bt_index_to_criteria_cols_d: Mapping of bt index to criteria column indexes
+            directional_variable_cols_d: Mapping of variables to directional variables
+            criteria_variables_infix_index_to_sym_d: Mapping of expression index to expression string
+            directional_exprs_cols_d: Mapping of full expressions to directional expressions
+        """
+        # Store all the loaded dictionaries directly - no reconstruction needed!
+        self.bt_index_to_criteria_cols_d = bt_index_to_criteria_cols_d
+        self.directional_variable_cols_d = directional_variable_cols_d
+        self.criteria_variables_infix_index_to_sym_d = criteria_variables_infix_index_to_sym_d
+        self.directional_exprs_cols_d = directional_exprs_cols_d
+        
+        # Create reverse mapping
+        self.criteria_variables_infix_sym_to_index_d = {v:k for k,v in criteria_variables_infix_index_to_sym_d.items()}
+        
+        # Create the list of expressions in index order
+        self.criteria_expressions_infix_l = [criteria_variables_infix_index_to_sym_d[i] 
+                                             for i in sorted(criteria_variables_infix_index_to_sym_d.keys())]
+
+
+    def create_bidding_table_boolean_columns(self, exprs_df, infix_expressions_d, bbo_bidding_table_position_d):
+        assert len(bbo_bidding_table_position_d) == 4
+        bt_bidding_col_results = {}
+        for direction in 'NESW':
+            direction = direction[0] # untuple dealer
+            cached_bt0_hits = 0
+            cached_binop_hits = 0
+            empty_eval_exprs = 0
+            binop_cache_d = {}
+            for pos,bts in bbo_bidding_table_position_d.items():
+                for bt0,bt in enumerate(bts):
+                    bt0 = bt[0]
+                    bt_exprs = bt[4]
+                    eval_expr_cols = [f'{direction}_expr_{str(infix_expressions_d[e]).zfill(3)}' for e in bt_exprs]
+                    if bt0 % 100000 == 0:
+                        print(direction,pos,bt0,bt)
+                        print(bt_exprs)
+                        print(eval_expr_cols)
+                    bid = '_'.join([direction,'bt',str(bt0)])
+                    if eval_expr_cols:
+                        if bid in bt_bidding_col_results:
+                            cached_bt0_hits += 1
+                        else:
+                            cache_k_ith = eval_expr_cols[0]
+                            if cache_k_ith in binop_cache_d:
+                                cached_binop_hits += 1
+                            else:
+                                # Convert to boolean type explicitly
+                                binop_cache_d[cache_k_ith] = exprs_df[cache_k_ith].cast(pl.Boolean)
+                            for last_row in eval_expr_cols[1:]:
+                                bid_k = cache_k_ith+'&'+last_row
+                                if bid_k in binop_cache_d:
+                                    cached_binop_hits += 1
+                                else:
+                                    # Convert both operands to boolean before AND operation
+                                    binop_cache_d[bid_k] = (binop_cache_d[cache_k_ith].cast(pl.Boolean) & 
+                                                        exprs_df[last_row].cast(pl.Boolean))
+                                cache_k_ith = bid_k
+                            bt_bidding_col_results[bid] = binop_cache_d[cache_k_ith].alias(bid)
+                    else:
+                        assert bid not in bt_bidding_col_results, bid
+                        empty_eval_exprs += 1
+            print(f"dealer:{direction} pos:{pos} cached binop columns:{len(binop_cache_d)} cache binop hits:{cached_binop_hits} cached bt0 hits:{cached_bt0_hits} empty eval exprs:{empty_eval_exprs}")
+            del binop_cache_d
+
+        return bt_bidding_col_results
+
+
+    def compute_bidding_table_results(self, criteria_bt_results_d, bbo_previous_bid_to_bt_entry_d):
+        bt_cols_d = {}
+        for direction in 'NESW':
+            for k,v in tqdm.tqdm(bbo_previous_bid_to_bt_entry_d.items()):
+                #print(f"{k=} {v=}")
+                #if v[0] == 10000:
+                #    break
+                bt0 = v[0] # 0,1,...
+                d_bt_bt0 = '_'.join([direction,'bt',str(bt0)]) # 'N_bt_0'
+                if len(v[1]) <= 1:
+                    # opening bid. no prior bids. assign current criteria results.
+                    # all opening bids must be in criteria_bt_results_d -- but only when bidding table is completed (4N)
+                    if d_bt_bt0 in criteria_bt_results_d:
+                        bt_cols_d[d_bt_bt0] = criteria_bt_results_d[d_bt_bt0]
+                    else:
+                        # todo: temp code until all eval_exprs of [] are filled in with actual expressions. default is all Trues.
+                        bt_cols_d[d_bt_bt0] = True 
+                    continue
+                prior_bt0 = bbo_previous_bid_to_bt_entry_d[(v[1][:-1],(v[1][-1],))][0] # prior result index
+                prior_d_bt_bt0 = '_'.join([direction,'bt',str(prior_bt0)]) # prior result column name
+                if d_bt_bt0 not in criteria_bt_results_d:
+                    bt_cols_d[d_bt_bt0] = bt_cols_d[prior_d_bt_bt0] # no current criteria results. Treat as all True. ergo pass on prior results.
+                elif bt_cols_d[prior_d_bt_bt0] == True:
+                    bt_cols_d[d_bt_bt0] = criteria_bt_results_d[d_bt_bt0]
+                else:
+                    # could test for all False (sum==0) and take some resource saving shortcut.
+                    bt_cols_d[d_bt_bt0] = bt_cols_d[prior_d_bt_bt0]&criteria_bt_results_d[d_bt_bt0] # AND prior result with current criteria result.
+    
+        return bt_cols_d
+
+
+    def evaluate_expression(self, exprs, df):
+        """
+        Evaluate expression using asteval for all rows in the dataframe.
+        Only handles single comparisons or double comparisons with a variable in the middle.
+        
+        Args:
+            expr (str): Expression to evaluate (e.g. "10 <= HCP <= 20")
+            df (polars.DataFrame): DataFrame containing columns referenced in expr
+            
+        Returns:
+            polars.Series: defaultdict(list) with results of expression evaluation
+        """
+
+        #print(exprs)
+        #if len(exprs) == 0:
+        #    return [True]
+        
+        # Convert dataframe columns to numpy arrays for the symbol table
+        t = time.time()
+        value_dict = {col: df[col].to_numpy() for col in df.columns}
+        
+        # Create interpreter with the data in the symbol table
+        aeval = Interpreter(symtable=value_dict)
+        
+        expr_results_d = defaultdict(list)
+        for d in 'NESW':
+            for expr in tqdm.tqdm(exprs):
+
+                # Evaluate expression
+                try:
+                    result_array = aeval.eval(expr.replace('{d}',d))
+                    if result_array is None:
+                        raise ValueError(f"Expression evaluation returned None: {expr=}")
+                except Exception as e:
+                    #raise ValueError(f"Expression evaluation exception: {expr=} {e=}")
+                    print(f"Expression evaluation exception: {expr=} {e=}")
+                    continue
+                
+                expr_results_d[d].append(result_array)
+        print(f"evaluate_expression: time: {time.time()-t:.2f}") # 1s
+        return expr_results_d
+
+    
     def create_bidding_table(self, df):
 
         # takes 10s.
         # Creates  len('NESW') * len(directional_exprs_cols_d) * train_df.height expressions. 4 * 349 * 1000 = 1.4m arrays.
         # Create expression dict with key of NESW, value of dict with key of index, value of expression result.
         t = time.time()
-        #directional_cols_l = [v.replace('{d}',d) for d in 'NESW' for v in directional_exprs_cols_d.values()]
-        evaluate_expression_d = self.evaluate_expression(self.directional_exprs_cols_d.values(), df)
+        
+        # Build a list of directional expressions using the order from criteria_variables_infix_index_to_sym_d
+        # This ensures we evaluate exactly the expressions that bt_index_to_criteria_cols_d will reference
+        directional_exprs_list = []
+        expr_indices = []
+        
+        # Use sorted indices to ensure consistent order
+        for idx in sorted(self.criteria_variables_infix_index_to_sym_d.keys()):
+            orig_expr = self.criteria_variables_infix_index_to_sym_d[idx]
+            
+            # Get the directional version of the expression
+            if orig_expr in self.directional_exprs_cols_d:
+                directional_expr = self.directional_exprs_cols_d[orig_expr]
+            else:
+                # No directional mapping, use original
+                directional_expr = orig_expr
+            
+            directional_exprs_list.append(directional_expr)
+            expr_indices.append(idx)
+        
+        print(f"About to evaluate {len(directional_exprs_list)} expressions")
+        
+        # Evaluate expressions (returns results in same order as input list)
+        evaluate_expression_d = self.evaluate_expression(directional_exprs_list, df)
         print(f"create_bidding_table: evaluate_expression_d: time: {time.time()-t:.2f}") # 1s
-        self.expr_results_d = {d:{i:e  for i,e in enumerate(v)} for d,v in evaluate_expression_d.items()}
+        
+        # Map results back to their original expression indices
+        # Use the original indices, not sequential 0, 1, 2, ...
+        self.expr_results_d = {}
+        for d, results_list in evaluate_expression_d.items():
+            self.expr_results_d[d] = {expr_indices[i]: results_list[i] for i in range(len(results_list))}
+        
         print(f"create_bidding_table: done: time: {time.time()-t:.2f}") # 1s
+        print(f"Stored results for {len(self.expr_results_d['N'])} expressions")
         print(len(self.expr_results_d),len(self.expr_results_d['N']),len(self.expr_results_d['N'][0]),self.expr_results_d['N'][0])
 
         return df
@@ -460,15 +577,20 @@ class ExpressionEvaluator:
                 self.incomplete_rules.add(bt0)
                 print('Incomplete rules detected:',row_index,bt)
                 continue
-            if bt[6]: # todo: implement instead of 'No suitable call'
-                bt_results_d[row_index].add(bt0) # add bt0 to row_index
+            
+            # Add this bid to results since it passed all criteria
+            bt_results_d[row_index].add(bt0)
+            
+            if bt[6]: # Completed auction (ends with 3 passes)
                 assert bt[1][-2:] + bt[2] == ('p','p','p'), (row_index,bt)
                 #print('Final auction:',row_index,bt0,bt[1][:-2])
-                continue
+                continue  # Don't recurse further for completed auctions
+            
             # default rule. might want to report for later vetting?
             #if bt[3].startswith('No suitable call'):
                 #print('Unexpected: No suitable call:',row_index,bt)
             assert bt[1][-2:] + bt[2] != ('p','p','p') or bt[1] + bt[2] == ('p','p','p'), (row_index,bt)
+            # Recurse to check possible responses to this bid
             self.collect_auctions_used(level+1, self.next_bidding_seat_d[d], bt[1]+bt[2], row_index, bt_results_d, bt_prior_bids_to_bt_entry_d, bt_bid_to_next_bids_d)
         return
 

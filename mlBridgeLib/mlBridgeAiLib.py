@@ -2,6 +2,11 @@
 # takes 1h10m/35m to produce df of 48m rows by 2546 columns. File size 33GB. Uses 1.4TB of memory/pagefile.
 # Create training data by merging of hand records augmented and board results augmented.
 
+# todo: C:\sw\bridge\ML-Contract-Bridge\src\acbl\mlBridgeLib\mlBridgeAiLib.py:2574: CategoricalRemappingWarning:
+#    Local categoricals have different encodings, expensive re-encoding is done to perform this merge operation.
+#    Consider using a StringCache or an Enum type if the categories are known in advance
+#    .replace_strict(mapping, default=unknown_idx, return_dtype=pl.Int64)
+
 # claude-4-sonnet says: GLOBAL ISSUES IDENTIFIED:
 # Issue 12: Memory Usage - 1.4TB memory usage indicates inefficient data loading/processing
 # Issue 13: Suboptimal Hyperparameters - batch size 32K may be too large, only 3 epochs may be insufficient
@@ -193,7 +198,12 @@ def setup_amp(device: str, use_amp: bool):
     Return:
         (device_t, scaler, autocast_fn)
     """
-    device_t = torch.device(device if device != 'cpu' and torch.cuda.is_available() else 'cpu')
+    cuda_available = torch.cuda.is_available()
+    print(f"[DEBUG setup_amp] Requested device: {device}, CUDA available: {cuda_available}")
+    
+    device_t = torch.device(device if device != 'cpu' and cuda_available else 'cpu')
+    print(f"[DEBUG setup_amp] Selected device: {device_t}")
+    
     scaler = torch.amp.GradScaler('cuda', enabled=use_amp and device_t.type == 'cuda')
     autocast_fn = lambda: torch.amp.autocast('cuda', enabled=use_amp and device_t.type == 'cuda')
     return device_t, scaler, autocast_fn
@@ -3286,19 +3296,41 @@ def train_classification_from_iterator(
 
     model_layers = layers or [2048, 1024, 512, 256]
     model = build_classifier_mlp(input_dim, num_classes, model_layers, dropout).to(device_t)
+    
+    if verbose:
+        print(f"[DEVICE] Training on device: {device_t}")
+        print(f"[DEVICE] Model on device: {next(model.parameters()).device}")
+        if torch.cuda.is_available():
+            print(f"[GPU] GPU Name: {torch.cuda.get_device_name(0)}")
+            print(f"[GPU] Initial memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+    
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = torch.nn.CrossEntropyLoss()
 
     model.train()
     for epoch in range(epochs):
         total_loss, total_count, correct = 0.0, 0, 0
+        batch_num = 0
         for xb, yb in train_iterator_fn():
             xb = xb.to(device_t)
             yb = yb.to(device_t)
+            
+            if verbose and batch_num == 0 and epoch == 0:
+                print(f"[BATCH] First batch: xb on {xb.device}, yb on {yb.device}")
+                if torch.cuda.is_available():
+                    print(f"[GPU] After loading batch: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+            
+            batch_num += 1
             opt.zero_grad(set_to_none=True)
             with autocast_fn():
                 logits = model(xb)
                 loss = loss_fn(logits, yb)
+            
+            if verbose and batch_num == 1 and epoch == 0:
+                if torch.cuda.is_available():
+                    print(f"[GPU] After forward pass: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+                    print(f"[GPU] Peak memory: {torch.cuda.max_memory_allocated()/1e9:.2f} GB")
+            
             if use_amp and device_t.type == 'cuda':
                 scaler.scale(loss).backward()
                 scaler.step(opt)
