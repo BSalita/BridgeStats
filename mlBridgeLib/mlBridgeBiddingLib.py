@@ -1,14 +1,21 @@
 
 # mlBridgeBiddingLib.py
 
-import polars as pl
-import numpy as np
-import tqdm
+import gc
+import multiprocessing as mp
+import pathlib
+import pickle
 import re
-import operator
-from asteval import Interpreter
-from collections import defaultdict
 import time
+import operator
+from collections import defaultdict
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+import polars as pl
+import psutil
+import tqdm
+from asteval import Interpreter  # type: ignore[import-not-found]
 
 
 # created and maintained by ChatGpt 4.0o on 22-Jun-2024
@@ -241,44 +248,49 @@ class CriteriaEvaluator:
         return expressions
 
 
-    def create_directional_exprs_cols(self, criteria_variables_infix_index_to_sym_d):
-        self.directional_exprs_cols_d = {} # map of original expr to directional expr
-        self.directional_variable_cols_d = {} # map of original expr to extracted directional variable
+    def create_directional_exprs_cols(self, criteria_variables_infix_syms):
+        self.directional_exprs_cols_d = {}  # map of original expr to directional expr
+        self.directional_variable_cols_d = {}  # map of base var -> directional var
         self.regex_col_names_d = {}
-        for k,v in criteria_variables_infix_index_to_sym_d.items():
-            splits_space = v.split(' ')
-            directional_var_name = splits_space[0]
-            splits_underscore = splits_space[0].split('_')
-            if len(splits_space) == 1:
-                assert len(splits_underscore) > 1, v
-                if splits_underscore[-1] in 'SHDCN':
-                    var_name = '_'.join(splits_underscore[:-1])+v[-2:].replace('_C','_{d}_C').replace('_D','_{d}_D').replace('_H','_{d}_H').replace('_S','_{d}_S').replace('_N','_{d}_N')
-                    self.directional_variable_cols_d[directional_var_name] = var_name
-                    self.directional_exprs_cols_d[v] = var_name
-                    self.regex_col_names_d[directional_var_name] = var_name[:-1].replace('{d}_','([NESW]_)?[CDHS]') 
-                elif splits_underscore[0] == 'C':
-                    var_name = v.replace('C_','C_{d}')
-                    self.directional_variable_cols_d[directional_var_name] = var_name
-                    self.directional_exprs_cols_d[v] = var_name
-                    self.regex_col_names_d[directional_var_name] = var_name[:-2].replace('{d}','([NESW])?[CDHS][AKQJT98765432]') # might need to add JT9-2
-                else:
-                    print('Ignoring non-directional:',v)
-                    var_name = v
-                    self.directional_variable_cols_d[directional_var_name] = var_name
-                    self.directional_exprs_cols_d[v] = var_name
-                    self.regex_col_names_d[directional_var_name] = var_name
+        # Accept either a dict (use values) or any iterable of strings
+        if isinstance(criteria_variables_infix_syms, dict):
+            expr_syms = list(criteria_variables_infix_syms.values())
+        else:
+            expr_syms = list(criteria_variables_infix_syms)
+        for v in expr_syms:
+            v = str(v)
+            m = re.match(r'^\s*([A-Za-z][A-Za-z0-9_]*(?:_[CDHSN])?)\s*(.*)$', v)
+            if not m:
+                # Fallback: identity mapping
+                self.directional_variable_cols_d[v] = v
+                self.directional_exprs_cols_d[v] = v
+                self.regex_col_names_d[v] = v
+                continue
+            base = m.group(1)  # variable token (may include _[CDHSN])
+            tail = m.group(2)  # operator and value (may be empty)
+            # Handle card pattern like 'C_CA', 'C_DQ', etc.
+            if base.startswith('C_') and len(base) >= 4:
+                # Insert {d} after 'C_' e.g. C_CA -> C_{d}CA
+                directional_var = base.replace('C_', 'C_{d}', 1)
+                regex = directional_var[:-2].replace('{d}', '([NESW])?[CDHS][AKQJT98765432]')
             else:
-                if splits_underscore[-1] in 'SHDCN':
-                    var_name = '_'.join(splits_underscore[:-1]+['{d}',splits_underscore[-1]])
-                    self.directional_variable_cols_d[directional_var_name] = var_name
-                    self.directional_exprs_cols_d[v] = var_name+' '+' '.join(splits_space[1:])
-                    self.regex_col_names_d[directional_var_name] = var_name.replace('{d}','([NESW]_)?[CDHS]')
+                parts = base.split('_')
+                last = parts[-1]
+                if last in ('C', 'D', 'H', 'S', 'N'):
+                    # Insert {d} before the final suit/NT token: SL_C -> SL_{d}_C
+                    directional_var = '_'.join(parts[:-1] + ['{d}', last])
+                    regex = directional_var[:-1].replace('{d}', '([NESW]_)?[CDHS]')
                 else:
-                    var_name = splits_space[0]+'_{d}'
-                    self.directional_variable_cols_d[directional_var_name] = var_name
-                    self.directional_exprs_cols_d[v] = var_name+' '+' '.join(splits_space[1:])
-                    self.regex_col_names_d[directional_var_name] = var_name.replace('{d}','([NESW]_)?[CDHS]')
-        return # self.regex_col_names_d, self.directional_variable_cols_d, self.directional_exprs_cols_d
+                    # Non-suit variable: add direction suffix HCP -> HCP_{d}, Total_Points -> Total_Points_{d}
+                    directional_var = f'{base}_{{d}}'
+                    regex = directional_var.replace('{d}', '([NESW])')
+            directional_expr = f'{directional_var} {tail.strip()}' if tail else directional_var
+            # Populate maps: base var -> directional var; full expr -> directional expr; regex for matching columns
+            self.directional_variable_cols_d[base] = directional_var
+            self.directional_exprs_cols_d[v] = directional_expr
+            self.regex_col_names_d[base] = regex
+        # Return dicts for convenience (attributes are already set)
+        return self.regex_col_names_d, self.directional_variable_cols_d, self.directional_exprs_cols_d
 
 
     def create_bidding_expr_dicts(self, bt_prior_bids_to_bt_entry_d):
@@ -308,7 +320,7 @@ class CriteriaEvaluator:
 
         # takes 0s
         # convert to directional variables
-        self.create_directional_exprs_cols(self.criteria_variables_infix_index_to_sym_d)
+        self.create_directional_exprs_cols(self.criteria_variables_infix_index_to_sym_d.values())
         
         # takes 6-7m
         # create dict of metric column used by bt entry expr list. keys are index. values are metric.
@@ -896,4 +908,360 @@ class AuctionFinder:
         print(f"augment_df_with_bidding_info took {elapsed_time:.2f}s to bid {len(df)} auctions. avg of {elapsed_time/len(df):.2f}s per auction")
         return exprs_dfs_d
 
+
+# =============================================================================
+# Bidding Query Functions (moved from bbo_bidding_queries_lowmem.py)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Paths & constants for bidding queries
+# ---------------------------------------------------------------------------
+
+rootPath = pathlib.Path("e:/bridge/data")
+if not rootPath.exists():
+    rootPath = pathlib.Path('.')
+    if not rootPath.exists():
+        raise ValueError(f'rootPath does not exist: {rootPath}')
+bboPath = rootPath.joinpath("bbo")
+dataPath = bboPath.joinpath("data")
+biddingPath = bboPath.joinpath("bidding")
+
+DIRECTIONS = ["N", "E", "S", "W"]
+KEYWORDS = {"and", "or", "not", "True", "False"}
+BIDDING_KEYWORDS = {"and", "or", "not", "True", "False"}  # Alias for backward compatibility
+
+
+# ---------------------------------------------------------------------------
+# Helpers for loading execution-plan metadata
+# ---------------------------------------------------------------------------
+
+def load_execution_plan_data() -> Tuple[List[str], Dict[str, Dict[str, str]], List[str], Dict[str, Dict[str, str]]]:
+    """Load pre-computed execution-plan data from pickle."""
+    exec_plan_file = biddingPath.joinpath("execution_plan_data.pkl")
+    t0 = time.time()
+    with open(exec_plan_file, "rb") as f:
+        saved_data: Dict[str, Any] = pickle.load(f)
+
+    unique_criteria_cols_l = saved_data["unique_criteria_cols_l"]
+    expr_map_by_direction = saved_data["expr_map_by_direction"]
+    valid_deal_columns = saved_data["valid_deal_columns"]
+    pythonized_exprs_by_direction = saved_data["pythonized_exprs_by_direction"]
+    del saved_data
+
+    print("Loaded pre-computed data (execution plan)")
+    print(f"  unique_criteria_cols_l: {len(unique_criteria_cols_l)} items")
+    print(f"  expr_map_by_direction: {len(expr_map_by_direction)} directions")
+    print(f"  valid_deal_columns: {len(valid_deal_columns)} columns")
+    print(f"  pythonized_exprs_by_direction: {len(pythonized_exprs_by_direction)} directions")
+    print(f"  load_execution_plan_data: {time.time() - t0:.2f}s")
+
+    return unique_criteria_cols_l, expr_map_by_direction, valid_deal_columns, pythonized_exprs_by_direction
+
+
+# ---------------------------------------------------------------------------
+# Low-memory loaders for the large DataFrames
+# ---------------------------------------------------------------------------
+
+def load_deal_df(
+    valid_deal_columns: List[str],
+    mldf_n_rows: int | None = None,
+) -> pl.DataFrame:
+    """Load `deal_df` with memory-saving tricks."""
+    bbo_mldf_augmented_file = dataPath.joinpath("bbo_mldf_augmented.parquet")
+
+    display_cols = ["index", "Hand_N", "Hand_E", "Hand_S", "Hand_W", "Dealer"]
+    columns_to_load = sorted(set(valid_deal_columns).union(display_cols))
+
+    print(f"Loading {len(columns_to_load)} columns into deal_df (criteria + display)...")
+    t0 = time.time()
+    deal_df = pl.read_parquet(
+        bbo_mldf_augmented_file,
+        columns=columns_to_load,
+        n_rows=mldf_n_rows,
+    )
+    print(f"Loaded deal_df: shape={deal_df.shape} in {time.time() - t0:.2f}s")
+
+    cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] if c in deal_df.columns]
+    if cat_cols:
+        deal_df = deal_df.with_columns([pl.col(c).cast(pl.Categorical) for c in cat_cols])
+        print(f"Converted columns to Categorical in deal_df: {cat_cols}")
+
+    return deal_df
+
+
+def load_bt_df(
+    include_expr_and_sequences: bool = False,
+) -> pl.DataFrame:
+    """Load `bt_df` with memory-saving tricks."""
+    bbo_bidding_table_augmented_file = biddingPath.joinpath("bbo_bidding_table_augmented.parquet")
+
+    base_cols = [
+        "is_opening_bid", "seat", "Auction",
+        "Agg_Expr_Seat_1", "Agg_Expr_Seat_2", "Agg_Expr_Seat_3", "Agg_Expr_Seat_4",
+    ]
+    extra_cols = ["Expr", "is_completed_auction", "previous_bid_indices"] if include_expr_and_sequences else []
+    cols_to_load = base_cols + extra_cols
+
+    print(f"Loading bt_df columns: {cols_to_load} (include_expr_and_sequences={include_expr_and_sequences})")
+    t0 = time.time()
+    bt_df = pl.read_parquet(bbo_bidding_table_augmented_file, columns=cols_to_load).with_row_index("index")
+    print(f"Loaded bt_df: shape={bt_df.shape} in {time.time() - t0:.2f}s")
+
+    if "seat" in bt_df.columns:
+        bt_df = bt_df.with_columns(pl.col("seat").cast(pl.UInt8))
+    bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] if c in bt_df.columns]
+    if bool_cols:
+        bt_df = bt_df.with_columns([pl.col(c).cast(pl.Boolean) for c in bool_cols])
+    if "Auction" in bt_df.columns:
+        bt_df = bt_df.with_columns(pl.col("Auction").cast(pl.Categorical))
+        print("Converted bt_df['Auction'] to Categorical")
+
+    return bt_df
+
+
+# ---------------------------------------------------------------------------
+# Criteria DataFrame helpers
+# ---------------------------------------------------------------------------
+
+def directional_to_directionless(
+    criteria_deal_dfs_directional: Dict[str, pl.DataFrame],
+    expr_map_by_direction: Dict[str, Dict[str, str]],
+) -> Tuple[Dict[str, pl.DataFrame], Dict[int, Dict[str, pl.DataFrame]]]:
+    """Convert directional criteria back to directionless and organize by seat."""
+    deal_criteria_by_direction_dfs: Dict[str, pl.DataFrame] = {}
+    for d in DIRECTIONS:
+        dir_df = criteria_deal_dfs_directional[d]
+        mapping = expr_map_by_direction[d]
+        inv_mapping = {v: k for k, v in mapping.items()}
+        deal_criteria_by_direction_dfs[d] = dir_df.rename(inv_mapping)
+
+    deal_criteria_by_seat_dfs: Dict[int, Dict[str, pl.DataFrame]] = {seat: {} for seat in range(1, 5)}
+    for dealer in DIRECTIONS:
+        dealer_idx = DIRECTIONS.index(dealer)
+        for seat in range(1, 5):
+            direction = DIRECTIONS[(dealer_idx + seat - 1) % 4]
+            deal_criteria_by_seat_dfs[seat][dealer] = deal_criteria_by_direction_dfs[direction]
+
+    return deal_criteria_by_direction_dfs, deal_criteria_by_seat_dfs
+
+
+def create_directional_deal_criteria_dfs(
+    df: pl.DataFrame,
+    pythonized_exprs_by_direction: Dict[str, Dict[str, str]],
+    expr_map_by_direction: Dict[str, Dict[str, str]],
+) -> Dict[str, pl.DataFrame]:
+    """Create criteria DataFrames using pre-pythonized expressions.
+
+    This is adapted from the notebook version but unchanged in behavior.
+    """
+
+    eval_env = {col: pl.col(col) for col in df.columns}
+
+    def expr_to_polars(pythonized_expr: str) -> pl.Expr:
+        # Extract tokens to check for missing columns
+        tokens = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", pythonized_expr)
+        tokens = [t for t in tokens if t not in KEYWORDS and t != "pl" and t != "lit"]
+        missing = [t for t in tokens if t not in eval_env]
+        if missing:
+            # If columns are missing, treat expression as always true
+            return pl.lit(True)
+        s = re.sub(r"\bTrue\b", "pl.lit(True)", pythonized_expr)
+        s = re.sub(r"\bFalse\b", "pl.lit(False)", s)
+        return eval(s, {"pl": pl}, eval_env)
+
+    criteria_dfs_directional: Dict[str, pl.DataFrame] = {}
+    for d in DIRECTIONS:
+        expr_objects = []
+        for orig_expr, pythonized_expr in pythonized_exprs_by_direction[d].items():
+            directional_name = expr_map_by_direction[d][orig_expr]
+            expr_obj = expr_to_polars(pythonized_expr)
+            if not isinstance(expr_obj, pl.Expr):
+                expr_obj = pl.lit(bool(expr_obj))
+            expr_objects.append(expr_obj.alias(directional_name))
+        criteria_dfs_directional[d] = df.select(expr_objects)
+    return criteria_dfs_directional
+
+
+def build_or_load_directional_criteria_bitmaps(
+    deal_df: pl.DataFrame,
+    pythonized_exprs_by_direction: Dict[str, Dict[str, str]],
+    expr_map_by_direction: Dict[str, Dict[str, str]],
+) -> Dict[str, pl.DataFrame]:
+    """Build per-direction criteria DataFrames.
+
+    Each returned DataFrame for a direction contains one boolean column per
+    criterion, with as many rows as deals.
+    """
+    print("Building criteria bitmaps for all directions...")
+    t0 = time.time()
+    criteria_deal_dfs_directional = create_directional_deal_criteria_dfs(
+        deal_df, pythonized_exprs_by_direction, expr_map_by_direction
+    )
+    print(f"Computed directional criteria for all directions in {time.time() - t0:.2f}s")
+
+    return criteria_deal_dfs_directional
+
+
+def get_direction_for_seat(dealer: str, seat: int) -> str:
+    dealer_idx = DIRECTIONS.index(dealer)
+    return DIRECTIONS[(dealer_idx + seat - 1) % 4]
+
+
+# ---------------------------------------------------------------------------
+# Opening-bid search
+# ---------------------------------------------------------------------------
+
+def find_all_opening_bids_by_seat(
+    dealer_deal_criteria: pl.DataFrame,
+    bt_openings_df: pl.DataFrame,
+    seat: int,
+) -> pl.DataFrame:
+    """Find opening bids for a single seat using vectorized operations."""
+    n_deals = dealer_deal_criteria.height
+    req_col = f"Agg_Expr_Seat_{seat}"
+    empty_result = lambda: pl.DataFrame(
+        {"candidate_bids": [[] for _ in range(n_deals)]},
+        schema={"candidate_bids": pl.List(pl.UInt32)},
+    )
+
+    if bt_openings_df.height == 0:
+        return empty_result()
+
+    grouped = bt_openings_df.group_by(req_col).agg(pl.col("index").alias("indices"))
+    exprs = []
+    meta = []
+    available_cols = set(dealer_deal_criteria.columns)
+
+    for i, row in enumerate(grouped.iter_rows(named=True)):
+        reqs = row[req_col]
+        indices = row["indices"]
+        if not reqs:
+            e = pl.lit(True)
+        else:
+            valid = [c for c in reqs if c in available_cols]
+            if len(valid) < len(reqs):
+                continue
+            e = pl.all_horizontal(valid)
+        exprs.append(e.alias(f"m_{i}"))
+        meta.append(indices)
+
+    if not exprs:
+        return empty_result()
+
+    mask_df = dealer_deal_criteria.select(exprs)
+    del grouped, exprs
+
+    matches = []
+    for i, col_name in enumerate(mask_df.columns):
+        if mask_df[col_name].any():
+            matched_rows = mask_df[col_name].arg_true().cast(pl.UInt32)
+            matches.append((matched_rows, meta[i]))
+
+    if not matches:
+        del mask_df, meta
+        return empty_result()
+
+    del mask_df
+
+    temp = pl.concat([
+        pl.DataFrame({
+            "row_id": rows,
+            "bids": pl.repeat(idxs, len(rows), dtype=pl.List(pl.UInt32), eager=True),
+        })
+        for rows, idxs in matches
+    ])
+
+    grouped_result = temp.explode("bids").group_by("row_id").agg(pl.col("bids"))
+    skeleton = pl.DataFrame({"row_id": pl.int_range(0, n_deals, dtype=pl.UInt32, eager=True)})
+    final = skeleton.join(grouped_result, on="row_id", how="left")
+    del matches, meta, temp, grouped_result, skeleton
+
+    return final.select(pl.col("bids").fill_null(pl.lit([], dtype=pl.List(pl.UInt32))).alias("candidate_bids"))
+
+
+def process_opening_bids(
+    deal_df: pl.DataFrame,
+    bt_df: pl.DataFrame,
+    deal_criteria_by_seat_dfs: Dict[int, Dict[str, pl.DataFrame]],
+    bt_parquet_file: pathlib.Path,
+    seats: List[int] | None = None,
+    directions: List[str] | None = None,
+    opening_directions: List[str] | None = None,
+) -> Dict[Tuple[str, int], Dict[str, Any]]:
+    """Find opening bids by dealer and seat."""
+    elapsed_time = time.time()
+    results: Dict[Tuple[str, int], Dict[str, Any]] = {}
+
+    seats_to_process = seats if seats is not None else [1, 2, 3, 4]
+    directions_to_process = directions if directions is not None else DIRECTIONS
+
+    valid_combos: set[Tuple[str, int]] = set()
+    if opening_directions is not None:
+        for dealer in directions_to_process:
+            dealer_idx = DIRECTIONS.index(dealer)
+            for seat in seats_to_process:
+                opener = DIRECTIONS[(dealer_idx + seat - 1) % 4]
+                if opener in opening_directions:
+                    valid_combos.add((dealer, seat))
+    else:
+        for dealer in directions_to_process:
+            for seat in seats_to_process:
+                valid_combos.add((dealer, seat))
+
+    print(f"Processing {len(valid_combos)} (dealer, seat) combinations...")
+    openings_by_seat: Dict[int, pl.DataFrame] = {}
+
+    for dealer in directions_to_process:
+        dealer_mask = deal_df["Dealer"] == dealer
+        if not dealer_mask.any():
+            print(f"Skipping Dealer={dealer} (no deals in dataset)")
+            continue
+
+        dealer_indices = dealer_mask.arg_true()
+
+        for seat in seats_to_process:
+            if (dealer, seat) not in valid_combos:
+                continue
+
+            agg_col = f"Agg_Expr_Seat_{seat}"
+
+            if seat not in openings_by_seat:
+                if agg_col not in bt_df.columns:
+                    print(f"Loading {agg_col} from parquet for seat {seat}")
+                    agg_expr_col = pl.read_parquet(bt_parquet_file, columns=[agg_col])
+                    bt_df_with_agg = bt_df.with_columns(agg_expr_col[agg_col])
+                    del agg_expr_col
+                else:
+                    bt_df_with_agg = bt_df
+
+                openings_by_seat[seat] = bt_df_with_agg.filter(
+                    (pl.col("seat") == seat)
+                    & pl.col("is_opening_bid")
+                    & pl.col(agg_col).list.len().gt(1)
+                )
+                if bt_df_with_agg is not bt_df:
+                    del bt_df_with_agg
+
+            bt_openings_df = openings_by_seat[seat]
+            criteria = deal_criteria_by_seat_dfs[seat][dealer][dealer_indices]
+
+            t = time.time()
+            new_candidates = find_all_opening_bids_by_seat(criteria, bt_openings_df, seat)
+            elapsed = max(time.time() - t, 1e-6)
+
+            direction = get_direction_for_seat(dealer, seat)
+            print(f"Dealer={dealer}, Seat {seat} ({direction}): {elapsed:.2f}s, "
+                  f"{criteria.height / elapsed:.0f}/sec, shape={new_candidates.shape}")
+
+            results[(dealer, seat)] = {
+                "candidates": new_candidates,
+                "original_indices": dealer_indices,
+            }
+
+            del criteria
+            gc.collect()
+
+    total_elapsed = time.time() - elapsed_time
+    print(f"\nTotal result keys: {len(results)} in {total_elapsed:.1f}s")
+    return results
 

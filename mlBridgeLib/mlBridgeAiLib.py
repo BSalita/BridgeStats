@@ -1,4 +1,3 @@
-
 # takes 1h10m/35m to produce df of 48m rows by 2546 columns. File size 33GB. Uses 1.4TB of memory/pagefile.
 # Create training data by merging of hand records augmented and board results augmented.
 
@@ -501,7 +500,6 @@ def format_epoch_line(epoch_idx: int, epochs: int, train_loss: float, val_loss: 
     parts = [
         f"Epoch {epoch_idx+1}/{epochs}",
         f"train_loss={train_loss:.6f}",
-        f"train_samples={epoch_samples}"
     ]
     if val_loss is not None:
         parts.append(f"val_loss={val_loss:.6f}")
@@ -538,7 +536,6 @@ def format_epoch_line_with_stats(
     parts = [
         f"Epoch {epoch_idx+1}/{epochs}",
         f"train_loss={train_loss:.6f}",
-        f"train_samples={epoch_samples}"
     ]
     if val_loss is not None:
         parts.append(f"val_loss={val_loss:.6f}")
@@ -583,7 +580,6 @@ def format_epoch_line_classification(
     parts = [
         f"Epoch {epoch_idx+1}/{epochs}",
         f"train_loss={train_loss:.6f}",
-        f"train_samples={epoch_samples}"
     ]
     if val_loss is not None:
         parts.append(f"val_loss={val_loss:.6f}")
@@ -628,7 +624,6 @@ def format_epoch_line_with_stats(
     parts = [
         f"Epoch {epoch_idx+1}/{epochs}",
         f"train_loss={train_loss:.6f}",
-        f"train_samples={epoch_samples}"
     ]
     if val_loss is not None:
         parts.append(f"val_loss={val_loss:.6f}")
@@ -673,7 +668,6 @@ def format_epoch_line_classification(
     parts = [
         f"Epoch {epoch_idx+1}/{epochs}",
         f"train_loss={train_loss:.6f}",
-        f"train_samples={epoch_samples}"
     ]
     if val_loss is not None:
         parts.append(f"val_loss={val_loss:.6f}")
@@ -1919,6 +1913,7 @@ def _train_model_core(
     print(f"▶ Training for {epochs} epoch(s)...")
 
     for epoch in range(epochs):
+        epoch_start = time.time()
         train_iter = train_iterator_fn()
         tloss, tcount = train_one_epoch(model, train_iter, loss_fn, opt, device_t, y_range, scaler, use_amp)
         train_loss = tloss / max(1, tcount)
@@ -1936,6 +1931,10 @@ def _train_model_core(
 
         if verbose or not validation_iterator_fn:
             line = format_epoch_line_with_stats(epoch, epochs, train_loss, vloss, tcount, vsamp or 0, val_pred_mean, val_pred_std)
+            epoch_dur = time.time() - epoch_start
+            line += f", time={epoch_dur:.1f}s"
+            if isinstance(device_t, torch.device) and device_t.type == 'cuda':
+                line += f", gpu_mem={torch.cuda.memory_allocated()/1e9:.2f}/{torch.cuda.memory_reserved()/1e9:.2f}GB"
             print(line)
 
     training_time = time.time() - training_start_time
@@ -2273,6 +2272,8 @@ def train_classification_from_df(
     model.train()
     for epoch in range(epochs):
         total_loss, total_count, correct = 0.0, 0, 0
+        batch_num = 0
+        epoch_start = time.time()
         for xb, yb in train_loader:
             xb = xb.to(device_t)
             yb = yb.to(device_t)
@@ -2296,7 +2297,25 @@ def train_classification_from_df(
         if verbose:
             avg_loss = total_loss / max(1, total_count)
             acc = correct / max(1, total_count)
-            print(f"Epoch {epoch+1}/{epochs} train_loss={avg_loss:.6f} acc={acc:.4f}")
+            epoch_dur = time.time() - epoch_start
+            
+            # Enhanced logging for classification
+            line = f"Epoch {epoch+1}/{epochs}, train_loss={avg_loss:.6f}, train_acc={acc:.4f}, train_samples={total_count}, time={epoch_dur:.1f}s"
+            
+            # Add validation stats if available (per-epoch validation)
+            if val_loader is not None:
+                model.eval()
+                with torch.no_grad():
+                    val_loss, val_count, val_acc, val_conf_mean, val_conf_std = eval_classification_with_stats(
+                        model, val_loader, loss_fn, device_t
+                    )
+                    val_loss = val_loss / max(1, val_count)
+                    line += f", val_loss={val_loss:.6f}, val_acc={val_acc:.4f}, val_samples={val_count}"
+                    if val_conf_mean is not None and val_conf_std is not None:
+                        line += f", val_conf_mean={val_conf_mean:.4f}, val_conf_std={val_conf_std:.4f}"
+                model.train()  # Switch back to training mode
+            
+            print(line)
 
     val_metrics: Optional[Dict[str, float]] = None
     if valid_df is not None:
@@ -2578,9 +2597,13 @@ def create_torch_shards(
         for col in categorical_feature_cols:
             col_series = shard_df[col]
             mapping = category_mappings.get(col, {})
+            # Ensure mapping keys are strings to match Utf8 casting
+            if mapping and not all(isinstance(k, str) for k in mapping.keys()):
+                mapping = {str(k): v for k, v in mapping.items()}
             unknown_idx = int(cat_feature_info.get(col, len(mapping)))
             mapped_values = (
                 col_series
+                .cast(pl.Utf8)
                 .replace_strict(mapping, default=unknown_idx, return_dtype=pl.Int64)
                 .to_numpy()
                 .astype(np.int64)
@@ -2598,10 +2621,13 @@ def create_torch_shards(
             unknown_class_index = 0
             if class_to_idx:
                 try:
+                    # Normalize class_to_idx keys to strings to match Utf8 casting
+                    _class_to_idx = class_to_idx if all(isinstance(k, str) for k in class_to_idx.keys()) else {str(k): v for k, v in class_to_idx.items()}
                     mapped = (
                         shard_df.select(
                             pl.col(y_name)
-                            .replace_strict(class_to_idx, default=unknown_class_index, return_dtype=pl.Int64)
+                            .cast(pl.Utf8)
+                            .replace_strict(_class_to_idx, default=unknown_class_index, return_dtype=pl.Int64)
                             .alias(y_name)
                         )
                         .to_numpy()
@@ -3056,11 +3082,29 @@ def train_classification_from_raw_shards(
     train_iterator_fn = lambda: _iter(train_files)
     val_iterator_fn = (lambda: _iter(valid_files)) if valid_files else None
 
+    # Determine number of classes from raw shards if not provided in schema
+    classes_list = schema.get('classes', [])
+    if classes_list:
+        inferred_num_classes = len(classes_list)
+    else:
+        inferred_num_classes = 0
+        for p in raw_shard_files:
+            payload = torch.load(p, map_location='cpu')
+            y = payload.get('y')
+            if y is not None and y.numel() > 0:
+                try:
+                    y_max = int(torch.as_tensor(y, dtype=torch.long).max().item())
+                    inferred_num_classes = max(inferred_num_classes, y_max + 1)
+                except Exception:
+                    pass
+        if inferred_num_classes <= 0:
+            inferred_num_classes = 1
+
     stats = train_classification_from_iterator(
         train_iterator_fn=train_iterator_fn,
         val_iterator_fn=val_iterator_fn,
         input_dim=input_dim,
-        num_classes=max(1, len(schema.get('classes', [])) or  int(max(1, 1))),
+        num_classes=inferred_num_classes,
         epochs=epochs,
         device=device,
         lr=lr,
@@ -3311,6 +3355,7 @@ def train_classification_from_iterator(
     for epoch in range(epochs):
         total_loss, total_count, correct = 0.0, 0, 0
         batch_num = 0
+        epoch_start = time.time()
         for xb, yb in train_iterator_fn():
             xb = xb.to(device_t)
             yb = yb.to(device_t)
@@ -3347,9 +3392,10 @@ def train_classification_from_iterator(
         if verbose:
             train_loss = total_loss/max(1,total_count)
             train_acc = correct/max(1,total_count)
+            epoch_dur = time.time() - epoch_start
             
             # Enhanced logging for classification
-            line = f"Epoch {epoch+1}/{epochs}, train_loss={train_loss:.6f}, train_acc={train_acc:.4f}, train_samples={total_count}"
+            line = f"Epoch {epoch+1}/{epochs}, train_loss={train_loss:.6f}, train_acc={train_acc:.4f}, time={epoch_dur:.1f}s"
             
             # Add validation stats if available (per-epoch validation)
             if val_iterator_fn is not None:
@@ -4748,7 +4794,12 @@ def _create_prediction_plots(y_name, preds, actuals, errors, analysis_results, p
     plt.legend()
 
     plt.tight_layout()
-    plt.show()
+    # Non-blocking display
+    try:
+        plt.show(block=False)
+        plt.pause(0.001)
+    except TypeError:
+        plt.show()
 
 
 def analyze_prediction_results_regression(
@@ -5157,7 +5208,11 @@ def _create_classification_plots(y_true, y_pred, confusion_matrix, labels, per_c
             bar.set_color(plt.cm.RdYlGn(class_accuracies[i]))
         
         plt.tight_layout()
-        plt.show()
+        try:
+            plt.show(block=False)
+            plt.pause(0.001)
+        except TypeError:
+            plt.show()
     else:
         # For many classes, show simplified plots as two separate figures
         # Annotate counts; if not enough room, reduce to top-N frequent classes until legible
@@ -5205,7 +5260,11 @@ def _create_classification_plots(y_true, y_pred, confusion_matrix, labels, per_c
         ax1.set_xlabel('Predicted')
         ax1.set_ylabel('Actual')
         plt.tight_layout()
-        plt.show()
+        try:
+            plt.show(block=False)
+            plt.pause(0.001)
+        except TypeError:
+            plt.show()
 
         # 2) Metrics distribution histogram in its own figure
         fig_metrics = plt.figure(figsize=(22, 8))
