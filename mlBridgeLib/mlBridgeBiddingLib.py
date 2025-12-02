@@ -975,12 +975,10 @@ def load_deal_df(
     )
     print(f"Loaded deal_df: shape={deal_df.shape} in {time.time() - t0:.2f}s")
 
-    # Only cast columns if they're not already Categorical
-    cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] 
-                if c in deal_df.columns and deal_df[c].dtype != pl.Categorical]
-    if cat_cols:
-        deal_df = deal_df.with_columns([pl.col(c).cast(pl.Categorical) for c in cat_cols])
-        print(f"Converted columns to Categorical in deal_df: {cat_cols}")
+    #cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] if c in deal_df.columns]
+    #if cat_cols:
+    #    deal_df = deal_df.with_columns([pl.col(c).cast(pl.Categorical) for c in cat_cols])
+    #    print(f"Converted columns to Categorical in deal_df: {cat_cols}")
 
     return deal_df
 
@@ -1003,16 +1001,15 @@ def load_bt_df(
     bt_df = pl.read_parquet(bbo_bidding_table_augmented_file, columns=cols_to_load).with_row_index("index")
     print(f"Loaded bt_df: shape={bt_df.shape} in {time.time() - t0:.2f}s")
 
-    # Only cast columns if they're not already the target type
-    if "seat" in bt_df.columns and bt_df["seat"].dtype != pl.UInt8:
-        bt_df = bt_df.with_columns(pl.col("seat").cast(pl.UInt8))
-    bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] 
-                 if c in bt_df.columns and bt_df[c].dtype != pl.Boolean]
-    if bool_cols:
-        bt_df = bt_df.with_columns([pl.col(c).cast(pl.Boolean) for c in bool_cols])
-    if "Auction" in bt_df.columns and bt_df["Auction"].dtype != pl.Categorical:
-        bt_df = bt_df.with_columns(pl.col("Auction").cast(pl.Categorical))
-        print("Converted bt_df['Auction'] to Categorical")
+    assert bt_df['seat'].dtype == pl.UInt8
+    assert bt_df['is_opening_bid'].dtype == pl.Boolean
+    assert bt_df['is_completed_auction'].dtype == pl.Boolean
+    #bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] if c in bt_df.columns]
+    #if bool_cols:
+    #    bt_df = bt_df.with_columns([pl.col(c).cast(pl.Boolean) for c in bool_cols])
+    #if "Auction" in bt_df.columns:
+    #    bt_df = bt_df.with_columns(pl.col("Auction").cast(pl.Categorical))
+    #    print("Converted bt_df['Auction'] to Categorical")
 
     return bt_df
 
