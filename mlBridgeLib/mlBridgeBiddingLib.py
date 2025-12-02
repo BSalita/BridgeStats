@@ -79,7 +79,7 @@ class CriteriaEvaluator:
         self.regex_col_names_d = {}
     
 
-    def handle_chained_comparison(self, tokens):
+    def _chained_comparison(self, tokens):
         """Pre-process chained comparisons before converting to postfix."""
         if len(tokens) >= 5:
             # Look for patterns like: a op1 b op2 c
@@ -406,6 +406,7 @@ class ExpressionEvaluator:
             cached_binop_hits = 0
             empty_eval_exprs = 0
             binop_cache_d = {}
+            pos = None  # Initialize to avoid unbound variable
             for pos,bts in bbo_bidding_table_position_d.items():
                 for bt0,bt in enumerate(bts):
                     bt0 = bt[0]
@@ -642,7 +643,7 @@ class BiddingSequenceAnalyzer:
         self.pair_direction = None
         self.last_bidder_seat = None
         self.last_bidder_pair_direction = None
-        self.first_bidder_of_strain_d = {(None, None): None}
+        self.first_bidder_of_strain_d: Dict[Tuple[str | None, str | None], str | None] = {}
 
         # auction variables
         self.initial_passes = self.PASSED_OUT_INITIAL_PASSES
@@ -747,7 +748,8 @@ class BiddingSequenceAnalyzer:
         # although auction may not be completed, determine declarer and on lead as if auction was completed.
         if self.last_bidder_pair_direction and self.strain:
             self.declarer_seat = self.first_bidder_of_strain_d[(self.last_bidder_pair_direction, self.strain)]
-            self.on_lead_seat = self.next_bidding_seat_d[self.declarer_seat]
+            if self.declarer_seat is not None:
+                self.on_lead_seat = self.next_bidding_seat_d[self.declarer_seat]
 
         return False  # No error
 
@@ -917,15 +919,6 @@ class AuctionFinder:
 # Paths & constants for bidding queries
 # ---------------------------------------------------------------------------
 
-rootPath = pathlib.Path("e:/bridge/data")
-if not rootPath.exists():
-    rootPath = pathlib.Path('.')
-    if not rootPath.exists():
-        raise ValueError(f'rootPath does not exist: {rootPath}')
-bboPath = rootPath.joinpath("bbo")
-dataPath = bboPath.joinpath("data")
-biddingPath = bboPath.joinpath("bidding")
-
 DIRECTIONS = ["N", "E", "S", "W"]
 KEYWORDS = {"and", "or", "not", "True", "False"}
 BIDDING_KEYWORDS = {"and", "or", "not", "True", "False"}  # Alias for backward compatibility
@@ -935,9 +928,10 @@ BIDDING_KEYWORDS = {"and", "or", "not", "True", "False"}  # Alias for backward c
 # Helpers for loading execution-plan metadata
 # ---------------------------------------------------------------------------
 
-def load_execution_plan_data() -> Tuple[List[str], Dict[str, Dict[str, str]], List[str], Dict[str, Dict[str, str]]]:
+def load_execution_plan_data(
+    exec_plan_file: pathlib.Path,
+) -> Tuple[List[str], Dict[str, Dict[str, str]], List[str], Dict[str, Dict[str, str]]]:
     """Load pre-computed execution-plan data from pickle."""
-    exec_plan_file = biddingPath.joinpath("execution_plan_data.pkl")
     t0 = time.time()
     with open(exec_plan_file, "rb") as f:
         saved_data: Dict[str, Any] = pickle.load(f)
@@ -963,11 +957,11 @@ def load_execution_plan_data() -> Tuple[List[str], Dict[str, Dict[str, str]], Li
 # ---------------------------------------------------------------------------
 
 def load_deal_df(
+    bbo_mldf_augmented_file: pathlib.Path,
     valid_deal_columns: List[str],
     mldf_n_rows: int | None = None,
 ) -> pl.DataFrame:
     """Load `deal_df` with memory-saving tricks."""
-    bbo_mldf_augmented_file = dataPath.joinpath("bbo_mldf_augmented.parquet")
 
     display_cols = ["index", "Hand_N", "Hand_E", "Hand_S", "Hand_W", "Dealer"]
     columns_to_load = sorted(set(valid_deal_columns).union(display_cols))
@@ -981,7 +975,9 @@ def load_deal_df(
     )
     print(f"Loaded deal_df: shape={deal_df.shape} in {time.time() - t0:.2f}s")
 
-    cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] if c in deal_df.columns]
+    # Only cast columns if they're not already Categorical
+    cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] 
+                if c in deal_df.columns and deal_df[c].dtype != pl.Categorical]
     if cat_cols:
         deal_df = deal_df.with_columns([pl.col(c).cast(pl.Categorical) for c in cat_cols])
         print(f"Converted columns to Categorical in deal_df: {cat_cols}")
@@ -990,10 +986,10 @@ def load_deal_df(
 
 
 def load_bt_df(
+    bbo_bidding_table_augmented_file: pathlib.Path,
     include_expr_and_sequences: bool = False,
 ) -> pl.DataFrame:
     """Load `bt_df` with memory-saving tricks."""
-    bbo_bidding_table_augmented_file = biddingPath.joinpath("bbo_bidding_table_augmented.parquet")
 
     base_cols = [
         "is_opening_bid", "seat", "Auction",
@@ -1007,12 +1003,14 @@ def load_bt_df(
     bt_df = pl.read_parquet(bbo_bidding_table_augmented_file, columns=cols_to_load).with_row_index("index")
     print(f"Loaded bt_df: shape={bt_df.shape} in {time.time() - t0:.2f}s")
 
-    if "seat" in bt_df.columns:
+    # Only cast columns if they're not already the target type
+    if "seat" in bt_df.columns and bt_df["seat"].dtype != pl.UInt8:
         bt_df = bt_df.with_columns(pl.col("seat").cast(pl.UInt8))
-    bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] if c in bt_df.columns]
+    bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] 
+                 if c in bt_df.columns and bt_df[c].dtype != pl.Boolean]
     if bool_cols:
         bt_df = bt_df.with_columns([pl.col(c).cast(pl.Boolean) for c in bool_cols])
-    if "Auction" in bt_df.columns:
+    if "Auction" in bt_df.columns and bt_df["Auction"].dtype != pl.Categorical:
         bt_df = bt_df.with_columns(pl.col("Auction").cast(pl.Categorical))
         print("Converted bt_df['Auction'] to Categorical")
 
