@@ -1008,6 +1008,7 @@ def load_bt_df(
     #bool_cols = [c for c in ["is_opening_bid", "is_completed_auction"] if c in bt_df.columns]
     #if bool_cols:
     #    bt_df = bt_df.with_columns([pl.col(c).cast(pl.Boolean) for c in bool_cols])
+    # todo: is this necessary? try removing it and see if it works.
     if "Auction" in bt_df.columns:
         bt_df = bt_df.with_columns(pl.col("Auction").cast(pl.Categorical))
         print("Converted bt_df['Auction'] to Categorical")
