@@ -936,20 +936,20 @@ def load_execution_plan_data(
     with open(exec_plan_file, "rb") as f:
         saved_data: Dict[str, Any] = pickle.load(f)
 
-    unique_criteria_cols_l = saved_data["unique_criteria_cols_l"]
+    directionless_criteria_cols: List[str] = saved_data["directionless_criteria_cols"]
     expr_map_by_direction = saved_data["expr_map_by_direction"]
     valid_deal_columns = saved_data["valid_deal_columns"]
     pythonized_exprs_by_direction = saved_data["pythonized_exprs_by_direction"]
     del saved_data
 
     print("Loaded pre-computed data (execution plan)")
-    print(f"  unique_criteria_cols_l: {len(unique_criteria_cols_l)} items")
+    print(f"  directionless_criteria_cols: {len(directionless_criteria_cols)} items")
     print(f"  expr_map_by_direction: {len(expr_map_by_direction)} directions")
     print(f"  valid_deal_columns: {len(valid_deal_columns)} columns")
     print(f"  pythonized_exprs_by_direction: {len(pythonized_exprs_by_direction)} directions")
     print(f"  load_execution_plan_data: {time.time() - t0:.2f}s")
 
-    return unique_criteria_cols_l, expr_map_by_direction, valid_deal_columns, pythonized_exprs_by_direction
+    return directionless_criteria_cols, expr_map_by_direction, valid_deal_columns, pythonized_exprs_by_direction
 
 
 # ---------------------------------------------------------------------------
