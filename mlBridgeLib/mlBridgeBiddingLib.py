@@ -1061,7 +1061,9 @@ def create_directional_deal_criteria_dfs(
         missing = [t for t in tokens if t not in eval_env]
         if missing:
             # If columns are missing, treat expression as always true
-            return pl.lit(True)
+            # todo: need to fix missing columns. return a column with the missing column name and a boolean value of True.
+            print(f"Important: Missing columns found. Defaulting to False. Need to fix this in previous steps: {missing}")
+            return pl.lit(False)
         s = re.sub(r"\bTrue\b", "pl.lit(True)", pythonized_expr)
         s = re.sub(r"\bFalse\b", "pl.lit(False)", s)
         return eval(s, {"pl": pl}, eval_env)
