@@ -620,6 +620,173 @@ def add_quick_tricks(df: pl.DataFrame) -> pl.DataFrame:
     
     # Apply partnership QT by suit calculations
     return df.with_columns(partnership_qt_suit)
+
+
+def add_quick_losers(df: pl.DataFrame) -> pl.DataFrame:
+    """Calculate Quick Losers for bridge hands using vectorized pattern matching.
+    
+    Purpose:
+    - Compute quick losers based on missing honor combinations
+    - Generate QL totals by direction, suit, and partnership
+    - Provide offensive strength assessment for hand evaluation (Losing Trick Count concept)
+
+    Parameters:
+    - df: DataFrame with suit string columns
+
+    Returns:
+    - DataFrame with added Quick Losers columns
+
+    Input columns:
+    - `Suit_[NESW]_[SHDC]`: Suit strings for pattern matching
+
+    Output columns:
+    - `QL_[NESW]_[SHDC]`: Quick losers by direction and suit
+    - `QL_[NESW]`: Total quick losers by direction
+    - `QL_(NS|EW)`: Partnership quick losers totals
+    - `QL_(NS|EW)_[SHDC]`: Partnership quick losers by suit
+
+    Notes:
+    - Standard QL values: Void=0, Singleton(A)=0, Singleton(x)=1
+    - Doubleton: AK=0, Ax/Kx=1, xx=2
+    - 3+ cards: 3 minus count of A, K, Q present (0-3 losers)
+    """
+    
+    # Calculate QL for each suit
+    ql_expr = [
+        pl.when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 0).then(pl.lit(0, dtype=pl.UInt8))
+        .when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 1).then(
+            pl.when(pl.col(f'Suit_{d}_{s}').str.starts_with('A')).then(pl.lit(0, dtype=pl.UInt8))
+            .otherwise(pl.lit(1, dtype=pl.UInt8)))
+        .when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 2).then(
+            pl.when(pl.col(f'Suit_{d}_{s}').str.starts_with('AK')).then(pl.lit(0, dtype=pl.UInt8))
+            .when(pl.col(f'Suit_{d}_{s}').str.starts_with('A')).then(pl.lit(1, dtype=pl.UInt8))
+            .when(pl.col(f'Suit_{d}_{s}').str.starts_with('K')).then(pl.lit(1, dtype=pl.UInt8))
+            .otherwise(pl.lit(2, dtype=pl.UInt8)))
+        .otherwise(pl.lit(3, dtype=pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('A').cast(pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('K').cast(pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('Q').cast(pl.UInt8))
+        .alias(f'QL_{d}_{s}')
+        for d in 'NESW' for s in 'SHDC'
+    ]
+    
+    # Apply suit QL calculations
+    df = df.with_columns(ql_expr)
+    
+    # Calculate QL for each direction
+    direction_ql = [
+        pl.sum_horizontal([pl.col(f'QL_{d}_{s}') for s in 'SHDC']).alias(f'QL_{d}')
+        for d in 'NESW'
+    ]
+    
+    # Apply direction QL calculations
+    df = df.with_columns(direction_ql)
+    
+    # Calculate partnership QL
+    partnership_ql = [
+        (pl.col('QL_N') + pl.col('QL_S')).alias('QL_NS'),
+        (pl.col('QL_E') + pl.col('QL_W')).alias('QL_EW')
+    ]
+    
+    # Apply partnership QL calculations
+    df = df.with_columns(partnership_ql)
+    
+    # Calculate partnership QL by suit
+    partnership_ql_suit = [
+        (pl.col(f'QL_N_{s}') + pl.col(f'QL_S_{s}')).alias(f'QL_NS_{s}')
+        for s in 'SHDC'
+    ] + [
+        (pl.col(f'QL_E_{s}') + pl.col(f'QL_W_{s}')).alias(f'QL_EW_{s}')
+        for s in 'SHDC'
+    ]
+    
+    # Apply partnership QL by suit calculations
+    return df.with_columns(partnership_ql_suit)
+
+
+def add_losing_trick_count(df: pl.DataFrame) -> pl.DataFrame:
+    """Calculate Losing Trick Count (LTC) for bridge hands using vectorized pattern matching.
+    
+    Purpose:
+    - Compute LTC for hand evaluation and bidding decisions
+    - Generate LTC totals by direction, suit, and partnership
+    - Standard bridge hand evaluation method (24 minus combined LTC = expected tricks)
+
+    Parameters:
+    - df: DataFrame with suit string columns
+
+    Returns:
+    - DataFrame with added Losing Trick Count columns
+
+    Input columns:
+    - `Suit_[NESW]_[SHDC]`: Suit strings for pattern matching
+
+    Output columns:
+    - `LTC_[NESW]_[SHDC]`: Losing trick count by direction and suit
+    - `LTC_[NESW]`: Total LTC by direction
+    - `LTC_(NS|EW)`: Partnership LTC totals
+    - `LTC_(NS|EW)_[SHDC]`: Partnership LTC by suit
+
+    Notes:
+    - Standard LTC values: Void=0, Singleton(A)=0, Singleton(x)=1
+    - Doubleton: AK=0, Ax/Kx=1, xx=2
+    - 3+ cards: 3 minus count of A, K, Q present (0-3 losers per suit)
+    - Combined tricks estimate: 24 - LTC_NS - LTC_EW
+    """
+    
+    # Calculate LTC for each suit
+    ltc_expr = [
+        pl.when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 0).then(pl.lit(0, dtype=pl.UInt8))
+        .when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 1).then(
+            pl.when(pl.col(f'Suit_{d}_{s}').str.starts_with('A')).then(pl.lit(0, dtype=pl.UInt8))
+            .otherwise(pl.lit(1, dtype=pl.UInt8)))
+        .when(pl.col(f'Suit_{d}_{s}').str.len_chars() == 2).then(
+            pl.when(pl.col(f'Suit_{d}_{s}').str.starts_with('AK')).then(pl.lit(0, dtype=pl.UInt8))
+            .when(pl.col(f'Suit_{d}_{s}').str.starts_with('A')).then(pl.lit(1, dtype=pl.UInt8))
+            .when(pl.col(f'Suit_{d}_{s}').str.starts_with('K')).then(pl.lit(1, dtype=pl.UInt8))
+            .otherwise(pl.lit(2, dtype=pl.UInt8)))
+        .otherwise(pl.lit(3, dtype=pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('A').cast(pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('K').cast(pl.UInt8)
+            - pl.col(f'Suit_{d}_{s}').str.contains('Q').cast(pl.UInt8))
+        .alias(f'LTC_{d}_{s}')
+        for d in 'NESW' for s in 'SHDC'
+    ]
+    
+    # Apply suit LTC calculations
+    df = df.with_columns(ltc_expr)
+    
+    # Calculate LTC for each direction
+    direction_ltc = [
+        pl.sum_horizontal([pl.col(f'LTC_{d}_{s}') for s in 'SHDC']).alias(f'LTC_{d}')
+        for d in 'NESW'
+    ]
+    
+    # Apply direction LTC calculations
+    df = df.with_columns(direction_ltc)
+    
+    # Calculate partnership LTC
+    partnership_ltc = [
+        (pl.col('LTC_N') + pl.col('LTC_S')).alias('LTC_NS'),
+        (pl.col('LTC_E') + pl.col('LTC_W')).alias('LTC_EW')
+    ]
+    
+    # Apply partnership LTC calculations
+    df = df.with_columns(partnership_ltc)
+    
+    # Calculate partnership LTC by suit
+    partnership_ltc_suit = [
+        (pl.col(f'LTC_N_{s}') + pl.col(f'LTC_S_{s}')).alias(f'LTC_NS_{s}')
+        for s in 'SHDC'
+    ] + [
+        (pl.col(f'LTC_E_{s}') + pl.col(f'LTC_W_{s}')).alias(f'LTC_EW_{s}')
+        for s in 'SHDC'
+    ]
+    
+    # Apply partnership LTC by suit calculations
+    return df.with_columns(partnership_ltc_suit)
+
+
 def add_suit_lengths(df: pl.DataFrame) -> pl.DataFrame:
     """Create suit length columns from suit string columns using vectorized operations.
 
@@ -5062,6 +5229,34 @@ class HandAugmenter:
             for suit in "SHDC":
                 assert f'QT_{direction}_{suit}' in self.df.columns, f"Column 'QT_{direction}_{suit}' was not created"
 
+    def _compute_quick_losers(self) -> None:
+        # Assert required columns exist
+        for direction in "NESW":
+            for suit in "SHDC":
+                assert f'Suit_{direction}_{suit}' in self.df.columns, f"Required column 'Suit_{direction}_{suit}' not found in DataFrame"
+        
+        if 'QL_N_S' not in self.df.columns:
+            self.df = self._time_operation("create QL", add_quick_losers, self.df)
+        
+        # Assert columns were created
+        for direction in "NESW":
+            for suit in "SHDC":
+                assert f'QL_{direction}_{suit}' in self.df.columns, f"Column 'QL_{direction}_{suit}' was not created"
+
+    def _compute_losing_trick_count(self) -> None:
+        # Assert required columns exist
+        for direction in "NESW":
+            for suit in "SHDC":
+                assert f'Suit_{direction}_{suit}' in self.df.columns, f"Required column 'Suit_{direction}_{suit}' not found in DataFrame"
+        
+        if 'LTC_N_S' not in self.df.columns:
+            self.df = self._time_operation("create LTC", add_losing_trick_count, self.df)
+        
+        # Assert columns were created
+        for direction in "NESW":
+            for suit in "SHDC":
+                assert f'LTC_{direction}_{suit}' in self.df.columns, f"Column 'LTC_{direction}_{suit}' was not created"
+
     def _compute_suit_lengths(self) -> None:
         # Assert required columns exist
         for direction in "NESW":
@@ -5205,6 +5400,8 @@ class HandAugmenter:
         self._add_card_presence_indicators()
         self._compute_high_card_points()
         self._compute_quick_tricks()
+        self._compute_quick_losers()
+        self._compute_losing_trick_count()
         self._compute_suit_lengths()
         self._compute_partnership_suit_lengths()
         self._build_suit_length_distributions()
