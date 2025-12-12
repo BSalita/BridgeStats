@@ -991,7 +991,7 @@ def load_bt_df(
     """Load `bt_df` with memory-saving tricks."""
 
     base_cols = [
-        "is_opening_bid", "seat", "Auction",
+        "is_opening_bid", "seat", "Auction", "Announcement",
         "Agg_Expr_Seat_1", "Agg_Expr_Seat_2", "Agg_Expr_Seat_3", "Agg_Expr_Seat_4",
     ]
     extra_cols = ["Expr", "is_completed_auction", "previous_bid_indices"] if include_expr_and_sequences else []
