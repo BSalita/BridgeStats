@@ -975,11 +975,13 @@ def load_deal_df(
     )
     print(f"Loaded deal_df: shape={deal_df.shape} in {time.time() - t0:.2f}s")
 
-    # todo: why are these columns Categorical?
-    cat_cols = [c for c in ["Dealer", "Hand_N", "Hand_E", "Hand_S", "Hand_W"] if c in deal_df.columns]
-    if cat_cols:
-        deal_df = deal_df.with_columns([pl.col(c).cast(pl.Categorical) for c in cat_cols])
-        print(f"Converted columns to Categorical in deal_df: {cat_cols}")
+    # Memory note:
+    # - Dealer has only 4 values → categorical is a clear win.
+    # - Hand_* columns are (nearly) unique per row → categorical usually *increases* memory
+    #   (dictionary of unique strings + codes), so don't cast those.
+    if "Dealer" in deal_df.columns:
+        deal_df = deal_df.with_columns(pl.col("Dealer").cast(pl.Categorical))
+        print("Converted deal_df['Dealer'] to Categorical")
 
     return deal_df
 
