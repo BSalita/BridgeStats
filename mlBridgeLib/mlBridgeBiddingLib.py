@@ -1267,3 +1267,145 @@ def process_opening_bids(
     print(f"\nTotal result keys: {len(results)} in {total_elapsed:.1f}s")
     return results
 
+
+# ---------------------------------------------------------------------------
+# Opening-bid search (seat1-only BT architecture)
+# ---------------------------------------------------------------------------
+
+def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.DataFrame:
+    """Build a tiny, seat-addressable opening-bids table from `bt_seat1_df`.
+    
+    Why this exists:
+    - The runtime API should not load `bbo_bt_augmented.parquet`.
+    - `bt_seat1_df` contains the *opening-call* rows (e.g. '1C', '1D', ...) with
+      the opener's requirements in `Agg_Expr_Seat_1`.
+    - For seats 2-4 we synthesize equivalent opening-call rows by *relabeling*
+      the requirements into `Agg_Expr_Seat_{seat}` and attaching a `seat` column.
+    
+    Output columns (minimal set used by the API + match engine):
+    - index: UInt32 synthetic primary key = bt_index * 4 + (seat-1)
+    - bt_index: UInt32 original bt_index from bt_seat1_df (for debugging/reference)
+    - seat: UInt8 1..4 (the opening seat being modeled)
+    - Auction: Utf8 opening call (no leading p-)
+    - Expr: optional expression list/struct passthrough
+    - Agg_Expr_Seat_1..4: lists, with exactly one populated (the seat being modeled)
+    """
+    required_cols = {"bt_index", "Auction", "is_opening_bid", "Agg_Expr_Seat_1"}
+    missing = sorted(required_cols - set(bt_seat1_df.columns))
+    if missing:
+        raise ValueError(f"bt_seat1_df missing required columns for opening-bid build: {missing}")
+
+    base = (
+        bt_seat1_df
+        .filter(pl.col("is_opening_bid") & pl.col("Agg_Expr_Seat_1").list.len().gt(1))
+        .select([c for c in ["bt_index", "Auction", "Expr", "Agg_Expr_Seat_1"] if c in bt_seat1_df.columns])
+        .with_columns(
+            pl.col("bt_index").cast(pl.UInt32).alias("bt_index"),
+            # Opening-bid rows should not need a leading pass prefix. Strip defensively.
+            pl.col("Auction").cast(pl.Utf8).str.replace(r"^(?:p-)+", "").alias("Auction"),
+        )
+    )
+
+    # Empty list literal of the correct dtype for Agg_Expr columns.
+    empty_req_list = pl.lit([], dtype=pl.List(pl.Utf8))
+
+    per_seat: list[pl.DataFrame] = []
+    for seat in (1, 2, 3, 4):
+        per_seat.append(
+            base.with_columns(
+                (pl.col("bt_index") * pl.lit(4, dtype=pl.UInt32) + pl.lit(seat - 1, dtype=pl.UInt32)).alias("index"),
+                pl.lit(seat).cast(pl.UInt8).alias("seat"),
+                # Populate only the requested seat's requirements; others are empty.
+                (pl.col("Agg_Expr_Seat_1") if seat == 1 else empty_req_list).alias("Agg_Expr_Seat_1"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 2 else empty_req_list).alias("Agg_Expr_Seat_2"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 3 else empty_req_list).alias("Agg_Expr_Seat_3"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 4 else empty_req_list).alias("Agg_Expr_Seat_4"),
+            )
+        )
+
+    out = pl.concat(per_seat, how="vertical")
+    # Keep a stable column order for downstream callers/UI.
+    ordered_cols = [c for c in ["index", "bt_index", "seat", "Auction", "Expr",
+                                "Agg_Expr_Seat_1", "Agg_Expr_Seat_2", "Agg_Expr_Seat_3", "Agg_Expr_Seat_4"] if c in out.columns]
+    return out.select(ordered_cols)
+
+
+def process_opening_bids_from_bt_seat1(
+    deal_df: pl.DataFrame,
+    bt_seat1_df: pl.DataFrame,
+    deal_criteria_by_seat_dfs: Dict[int, Dict[str, pl.DataFrame]],
+    seats: List[int] | None = None,
+    directions: List[str] | None = None,
+    opening_directions: List[str] | None = None,
+) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], pl.DataFrame]:
+    """Compute opening-bid candidates using only `bt_seat1_df`.
+    
+    Returns:
+    - results: same structure as `process_opening_bids(...)` (candidates + original_indices)
+    - bt_openings_df: small lookup table used by the API for display/filtering
+    """
+    bt_openings_df = build_opening_bids_table_from_bt_seat1(bt_seat1_df)
+
+    elapsed_time = time.time()
+    results: Dict[Tuple[str, int], Dict[str, Any]] = {}
+
+    seats_to_process = seats if seats is not None else [1, 2, 3, 4]
+    directions_to_process = directions if directions is not None else DIRECTIONS
+
+    valid_combos: set[Tuple[str, int]] = set()
+    if opening_directions is not None:
+        for dealer in directions_to_process:
+            dealer_idx = DIRECTIONS.index(dealer)
+            for seat in seats_to_process:
+                opener = DIRECTIONS[(dealer_idx + seat - 1) % 4]
+                if opener in opening_directions:
+                    valid_combos.add((dealer, seat))
+    else:
+        for dealer in directions_to_process:
+            for seat in seats_to_process:
+                valid_combos.add((dealer, seat))
+
+    print(f"Processing {len(valid_combos)} (dealer, seat) combinations (seat1-only openings)...")
+    openings_by_seat: Dict[int, pl.DataFrame] = {
+        s: bt_openings_df.filter(pl.col("seat") == s) for s in seats_to_process
+    }
+
+    for dealer in directions_to_process:
+        dealer_mask = deal_df["Dealer"] == dealer
+        if not dealer_mask.any():
+            print(f"Skipping Dealer={dealer} (no deals in dataset)")
+            continue
+
+        dealer_indices = dealer_mask.arg_true()
+
+        for seat in seats_to_process:
+            if (dealer, seat) not in valid_combos:
+                continue
+
+            bt_openings_df_for_seat = openings_by_seat.get(seat)
+            if bt_openings_df_for_seat is None:
+                continue
+
+            criteria = deal_criteria_by_seat_dfs[seat][dealer][dealer_indices]
+
+            t = time.time()
+            new_candidates = find_all_opening_bids_by_seat(criteria, bt_openings_df_for_seat, seat)
+            elapsed = max(time.time() - t, 1e-6)
+
+            direction = get_direction_for_seat(dealer, seat)
+            print(
+                f"Dealer={dealer}, Seat {seat} ({direction}): {elapsed:.2f}s, "
+                f"{criteria.height / elapsed:.0f}/sec, shape={new_candidates.shape}"
+            )
+
+            results[(dealer, seat)] = {
+                "candidates": new_candidates,
+                "original_indices": dealer_indices,
+            }
+
+            del criteria
+            gc.collect()
+
+    total_elapsed = time.time() - elapsed_time
+    print(f"\nTotal result keys: {len(results)} in {total_elapsed:.1f}s")
+    return results, bt_openings_df
