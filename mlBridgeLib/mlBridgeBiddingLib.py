@@ -1084,23 +1084,155 @@ def create_directional_deal_criteria_dfs(
     return criteria_dfs_directional
 
 
+def _get_bitmap_path(deal_file: pathlib.Path) -> pathlib.Path:
+    """Get single bitmap file path based on the deal file name.
+    
+    For deal file 'bbo_mldf_augmented.parquet', bitmap is named:
+    - bbo_mldf_augmented_criteria_bitmaps.parquet
+    
+    The file contains columns for all 4 directions with prefixes: DIR_N_, DIR_E_, DIR_S_, DIR_W_
+    """
+    stem = deal_file.stem  # e.g., 'bbo_mldf_augmented'
+    parent = deal_file.parent
+    return parent / f"{stem}_criteria_bitmaps.parquet"
+
+
+def _bitmap_file_is_stale(
+    deal_file: pathlib.Path,
+    exec_plan_file: pathlib.Path,
+    bitmap_path: pathlib.Path,
+) -> Tuple[bool, str]:
+    """Check if bitmap file needs rebuilding.
+    
+    Returns (is_stale, reason) tuple.
+    """
+    # Check if bitmap file is missing
+    if not bitmap_path.exists():
+        return True, f"bitmap file missing: {bitmap_path.name}"
+    
+    # Check if source files are newer than bitmap
+    source_files = [deal_file, exec_plan_file]
+    missing_sources = [f for f in source_files if not f.exists()]
+    if missing_sources:
+        return True, f"source files missing: {[str(f) for f in missing_sources]}"
+    
+    # Get bitmap mtime and newest source mtime
+    bitmap_mtime = bitmap_path.stat().st_mtime
+    newest_source_mtime = max(f.stat().st_mtime for f in source_files)
+    
+    if newest_source_mtime > bitmap_mtime:
+        # Find which source is newer
+        for f in source_files:
+            if f.stat().st_mtime > bitmap_mtime:
+                return True, f"source file newer than bitmap: {f.name}"
+    
+    return False, "bitmap is fresh"
+
+
+def _combine_direction_dfs(dfs_by_direction: Dict[str, pl.DataFrame]) -> pl.DataFrame:
+    """Combine 4 direction DataFrames into one with prefixed column names."""
+    combined_cols = []
+    for direction in DIRECTIONS:
+        df = dfs_by_direction[direction]
+        # Prefix each column with DIR_{direction}_
+        for col in df.columns:
+            combined_cols.append(df[col].alias(f"DIR_{direction}_{col}"))
+    return pl.DataFrame().with_columns(combined_cols) if combined_cols else pl.DataFrame()
+
+
+def _split_combined_df(combined_df: pl.DataFrame) -> Dict[str, pl.DataFrame]:
+    """Split a combined DataFrame back into 4 direction DataFrames."""
+    result = {}
+    for direction in DIRECTIONS:
+        prefix = f"DIR_{direction}_"
+        # Find columns for this direction and strip prefix
+        dir_cols = [c for c in combined_df.columns if c.startswith(prefix)]
+        if dir_cols:
+            # Select and rename columns (strip prefix)
+            renamed = [pl.col(c).alias(c[len(prefix):]) for c in dir_cols]
+            result[direction] = combined_df.select(renamed)
+        else:
+            result[direction] = pl.DataFrame()
+    return result
+
+
 def build_or_load_directional_criteria_bitmaps(
     deal_df: pl.DataFrame,
     pythonized_exprs_by_direction: Dict[str, Dict[str, str]],
     expr_map_by_direction: Dict[str, Dict[str, str]],
+    deal_file: pathlib.Path | None = None,
+    exec_plan_file: pathlib.Path | None = None,
 ) -> Dict[str, pl.DataFrame]:
-    """Build per-direction criteria DataFrames.
+    """Build or load per-direction criteria DataFrames.
 
     Each returned DataFrame for a direction contains one boolean column per
     criterion, with as many rows as deals.
+    
+    If deal_file and exec_plan_file are provided, attempts to load cached
+    bitmap file. If cached file is missing or stale (source files are newer),
+    rebuilds and saves the bitmap.
+    
+    Bitmap file is named based on the deal file:
+    - {deal_file_stem}_criteria_bitmaps.parquet
+    
+    The file contains all 4 directions with column prefixes: DIR_N_, DIR_E_, etc.
+    
+    Args:
+        deal_df: DataFrame of deals to evaluate criteria against
+        pythonized_exprs_by_direction: Criteria expressions per direction
+        expr_map_by_direction: Maps original expressions to directional names
+        deal_file: Path to the deal parquet file (for cache naming/staleness check)
+        exec_plan_file: Path to execution plan pickle (for staleness check)
+    
+    Returns:
+        Dict mapping direction (N/E/S/W) to DataFrame of boolean criteria columns
     """
-    print("Building criteria bitmaps for all directions...")
+    # If no file paths provided, always build (legacy behavior)
+    if deal_file is None or exec_plan_file is None:
+        print("[bitmaps] No file paths provided, building fresh (no caching)")
+        t0 = time.time()
+        criteria_deal_dfs_directional = create_directional_deal_criteria_dfs(
+            deal_df, pythonized_exprs_by_direction, expr_map_by_direction
+        )
+        print(f"[bitmaps] Built in {time.time() - t0:.1f}s")
+        return criteria_deal_dfs_directional
+    
+    # Get bitmap file path
+    bitmap_path = _get_bitmap_path(deal_file)
+    
+    # Check if bitmap is stale
+    is_stale, reason = _bitmap_file_is_stale(deal_file, exec_plan_file, bitmap_path)
+    
+    if not is_stale:
+        # Load from cache
+        print(f"[bitmaps] Loading cached bitmap ({reason})")
+        t0 = time.time()
+        combined_df = pl.read_parquet(bitmap_path)
+        result = _split_combined_df(combined_df)
+        total_cols = sum(len(df.columns) for df in result.values())
+        print(f"[bitmaps] Loaded {combined_df.height:,} rows, {total_cols} cols from {bitmap_path.name} in {time.time() - t0:.1f}s")
+        for direction, df in result.items():
+            print(f"  {direction}: {len(df.columns)} cols")
+        return result
+    
+    # Build fresh
+    print(f"[bitmaps] Building fresh ({reason})")
     t0 = time.time()
     criteria_deal_dfs_directional = create_directional_deal_criteria_dfs(
         deal_df, pythonized_exprs_by_direction, expr_map_by_direction
     )
-    print(f"Computed directional criteria for all directions in {time.time() - t0:.2f}s")
-
+    build_time = time.time() - t0
+    print(f"[bitmaps] Built in {build_time:.1f}s")
+    
+    # Combine and save to cache
+    print("[bitmaps] Saving to cache...")
+    t0 = time.time()
+    combined_df = _combine_direction_dfs(criteria_deal_dfs_directional)
+    combined_df.write_parquet(bitmap_path)
+    size_mb = bitmap_path.stat().st_size / (1024 * 1024)
+    total_cols = sum(len(df.columns) for df in criteria_deal_dfs_directional.values())
+    print(f"[bitmaps] Saved {combined_df.height:,} rows, {total_cols} cols → {bitmap_path.name} ({size_mb:.1f} MB) in {time.time() - t0:.1f}s")
+    
     return criteria_deal_dfs_directional
 
 
