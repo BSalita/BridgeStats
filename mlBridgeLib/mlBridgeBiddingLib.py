@@ -983,6 +983,32 @@ def load_deal_df(
         deal_df = deal_df.with_columns(pl.col("Dealer").cast(pl.Categorical))
         print("Converted deal_df['Dealer'] to Categorical")
 
+    # --- DOWNCASTING FIX ---
+    # Automatically downcast numeric columns to UInt8/Int8/Int16 where safe
+    print("Downcasting deal_df columns...")
+    cast_ops = []
+    for c in deal_df.columns:
+        dtype = deal_df.schema[c]
+        if dtype in (pl.Int64, pl.Int32, pl.UInt64, pl.UInt32, pl.Float64, pl.Float32):
+            # Check column names for bridge-specific patterns
+            col_expr = pl.col(c)
+            if dtype in (pl.Float64, pl.Float32):
+                col_expr = col_expr.fill_nan(None)
+
+            if any(x in c for x in ["HCP", "SL_", "Total_Points", "Tricks", "Result"]):
+                # These are always small (0-100ish)
+                cast_ops.append(col_expr.fill_null(0).cast(pl.UInt8 if "UInt" in str(dtype) or "Float" in str(dtype) else pl.Int8))
+            elif any(x in c for x in ["Score", "ParScore", "DD_Score", "EV_"]):
+                # These can be larger or have decimals (EV)
+                if "EV_" in c or dtype in (pl.Float64, pl.Float32):
+                    cast_ops.append(col_expr.cast(pl.Float32))
+                else:
+                    cast_ops.append(col_expr.fill_null(0).cast(pl.Int16))
+    
+    if cast_ops:
+        deal_df = deal_df.with_columns(cast_ops)
+    # -----------------------
+
     return deal_df
 
 
