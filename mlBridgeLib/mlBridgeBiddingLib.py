@@ -79,6 +79,25 @@ class CriteriaEvaluator:
         self.regex_col_names_d = {}
     
 
+    def strip_comments(self, expr: str) -> str:
+        """Strip comments from an expression.
+        
+        A '#' character marks the beginning of a comment - everything from '#' 
+        to the end of the line is ignored.
+        
+        Args:
+            expr: The expression string, possibly containing comments
+            
+        Returns:
+            The expression with comments removed and whitespace stripped
+        """
+        # Find the position of '#' and take only the part before it
+        comment_pos = expr.find('#')
+        if comment_pos != -1:
+            expr = expr[:comment_pos]
+        return expr.strip()
+
+
     def _chained_comparison(self, tokens):
         """Pre-process chained comparisons before converting to postfix."""
         if len(tokens) >= 5:
@@ -143,16 +162,30 @@ class CriteriaEvaluator:
     def extract_variables(self, criteria_l):
         variables = set()
         for expr in criteria_l:
-            variables.update(re.findall(r'\b[a-zA-Z_]\w*\b', expr))
+            # Strip comments before extracting variables
+            expr = self.strip_comments(expr)
+            if expr:  # Skip empty expressions (comment-only lines)
+                variables.update(re.findall(r'\b[a-zA-Z_]\w*\b', expr))
         return list(variables)
 
 
     def create_parsing_logic(self, criteria_l):
-        """Create parsing logic for a list of infix expressions."""
-        variables = self.extract_variables(criteria_l)
+        """Create parsing logic for a list of infix expressions.
+        
+        Lines starting with '#' or containing only comments are skipped.
+        Inline comments (text after '#') are stripped from expressions.
+        """
+        # Strip comments and filter out empty/comment-only lines
+        cleaned_criteria_l = []
+        for expr in criteria_l:
+            cleaned_expr = self.strip_comments(expr)
+            if cleaned_expr:  # Skip empty expressions (comment-only lines)
+                cleaned_criteria_l.append(cleaned_expr)
+        
+        variables = self.extract_variables(cleaned_criteria_l)
         postfix_expressions = []
         
-        for expr in criteria_l:
+        for expr in cleaned_criteria_l:
             tokens = re.findall(self.token_pattern, expr)
             postfix_expr = self.infix_to_postfix(tokens)
             postfix_expressions.append(postfix_expr)
@@ -243,7 +276,13 @@ class CriteriaEvaluator:
             #print(eval_expr)
             if len(eval_expr[4]):
                 expressions_l.extend(eval_expr[4])
-        expressions = sorted(set(expressions_l))
+        # Strip comments and filter out empty/comment-only expressions
+        cleaned_expressions = []
+        for expr in expressions_l:
+            cleaned_expr = self.strip_comments(expr)
+            if cleaned_expr:
+                cleaned_expressions.append(cleaned_expr)
+        expressions = sorted(set(cleaned_expressions))
         print(f"create_eval_criteria: done: time: {time.time()-t:.2f}") # 1s
         return expressions
 
