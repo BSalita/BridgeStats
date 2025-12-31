@@ -3038,10 +3038,11 @@ def add_suit_quality_indicators(df: pl.DataFrame, suit_quality_criteria: dict, s
     
     df = df.with_columns(series_expressions)
     df = df.with_columns([
-        pl.lit(False).alias(f"Forcing_One_Round"),
-        pl.lit(False).alias(f"Opponents_Cannot_Play_Undoubled_Below_2N"),
-        pl.lit(False).alias(f"Forcing_To_2N"),
-        pl.lit(False).alias(f"Forcing_To_3N"),
+        # Unknown/unevaluable criteria default to True (pass) to avoid false negatives
+        pl.lit(True).alias(f"Forcing_One_Round"),
+        pl.lit(True).alias(f"Opponents_Cannot_Play_Undoubled_Below_2N"),
+        pl.lit(True).alias(f"Forcing_To_2N"),
+        pl.lit(True).alias(f"Forcing_To_3N"),
     ])
     return df
 

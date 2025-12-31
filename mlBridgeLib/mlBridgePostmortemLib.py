@@ -363,7 +363,11 @@ class PostmortemBase(ABC):
             # Report header information
             report_title = f"Bridge Game Postmortem Report"
             if hasattr(st.session_state, 'player_name') and st.session_state.player_name:
-                report_title += f" Personalized for {st.session_state.player_name}"
+                player_license = getattr(st.session_state, 'player_license_number', '')
+                if player_license:
+                    report_title += f" Personalized for {st.session_state.player_name} ({player_license})"
+                else:
+                    report_title += f" Personalized for {st.session_state.player_name}"
             
             report_creator = f"Created by https://{getattr(st.session_state, 'game_name', 'bridge')}.postmortem.chat"
             
@@ -373,6 +377,8 @@ class PostmortemBase(ABC):
                 event_info_parts.append(st.session_state.organization_name)
             if hasattr(st.session_state, 'game_description') and st.session_state.game_description:
                 event_info_parts.append(st.session_state.game_description)
+            if hasattr(st.session_state, 'tournament_date') and st.session_state.tournament_date:
+                event_info_parts.append(f"on {st.session_state.tournament_date}")
             if hasattr(st.session_state, 'session_id') and st.session_state.session_id:
                 event_info_parts.append(f"(event id {st.session_state.session_id})")
             
@@ -394,7 +400,11 @@ class PostmortemBase(ABC):
             if hasattr(st.session_state, 'player_direction') and st.session_state.player_direction:
                 match_info_parts.append(f"You played {st.session_state.player_direction}")
             if hasattr(st.session_state, 'partner_name') and st.session_state.partner_name:
-                match_info_parts.append(f"Your partner was {st.session_state.partner_name}")
+                partner_license = getattr(st.session_state, 'partner_license_number', '')
+                if partner_license:
+                    match_info_parts.append(f"Your partner was {st.session_state.partner_name} ({partner_license})")
+                else:
+                    match_info_parts.append(f"Your partner was {st.session_state.partner_name}")
             if hasattr(st.session_state, 'partner_direction') and st.session_state.partner_direction:
                 match_info_parts.append(f"who played {st.session_state.partner_direction}")
             
@@ -471,11 +481,23 @@ class PostmortemBase(ABC):
         if hasattr(st.session_state, 'pdf_link') and st.session_state.pdf_link:
             try:
                 import streamlitlib
+                # Build PDF title with player name and license number
+                pdf_player_name = getattr(st.session_state, 'player_name', '')
+                pdf_player_license = getattr(st.session_state, 'player_license_number', '')
+                if pdf_player_name and pdf_player_license:
+                    pdf_player_info = f"{pdf_player_name} ({pdf_player_license})"
+                elif pdf_player_name:
+                    pdf_player_info = pdf_player_name
+                elif pdf_player_license:
+                    pdf_player_info = pdf_player_license
+                else:
+                    pdf_player_info = getattr(st.session_state, 'player_id', 'Player')
+                
                 if st.session_state.pdf_link.download_button(
                     label="Download Personalized Report PDF",
                     data=streamlitlib.create_pdf(
                         st.session_state.pdf_assets, 
-                        title=f"Bridge Game Postmortem Report Personalized for {getattr(st.session_state, 'player_id', 'Player')}"
+                        title=f"Bridge Game Postmortem Report Personalized for {pdf_player_info}"
                     ),
                     file_name=f"{getattr(st.session_state, 'session_id', 'session')}-{getattr(st.session_state, 'player_id', 'player')}-morty.pdf",
                     disabled=len(st.session_state.pdf_assets) == 0,
