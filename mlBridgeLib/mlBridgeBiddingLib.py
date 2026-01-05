@@ -1332,8 +1332,15 @@ def find_all_opening_bids_by_seat(
     available_cols = set(dealer_deal_criteria.columns)
 
     for i, row in enumerate(grouped.iter_rows(named=True)):
-        reqs = row[req_col]
+        reqs_raw = row[req_col]
         indices = row["indices"]
+        
+        # Handle both list and pipe-separated string (memory optimization)
+        if isinstance(reqs_raw, str):
+            reqs = [r for r in reqs_raw.split("|") if r]
+        else:
+            reqs = reqs_raw
+
         if not reqs:
             e = pl.lit(True)
         else:
@@ -1433,10 +1440,21 @@ def process_opening_bids(
                 else:
                     bt_df_with_agg = bt_df
 
+                # Detect if the column is categorical/string instead of list
+                dtype = bt_df_with_agg.schema.get(agg_col)
+                is_optimized = False
+                if dtype is not None:
+                    is_optimized = "List" not in str(dtype)
+                
+                if is_optimized:
+                    filter_cond = pl.col(agg_col).is_not_null()
+                else:
+                    filter_cond = pl.col(agg_col).list.len().gt(1)
+
                 openings_by_seat[seat] = bt_df_with_agg.filter(
                     (pl.col("seat") == seat)
                     & pl.col("is_opening_bid")
-                    & pl.col(agg_col).list.len().gt(1)
+                    & filter_cond
                 )
                 if bt_df_with_agg is not bt_df:
                     del bt_df_with_agg
@@ -1469,7 +1487,10 @@ def process_opening_bids(
 # Opening-bid search (seat1-only BT architecture)
 # ---------------------------------------------------------------------------
 
-def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.DataFrame:
+def build_opening_bids_table_from_bt_seat1(
+    bt_seat1_df: pl.DataFrame,
+    bt_parquet_file: pathlib.Path | str | None = None,
+) -> pl.DataFrame:
     """Build a tiny, seat-addressable opening-bids table from `bt_seat1_df`.
     
     Why this exists:
@@ -1479,6 +1500,10 @@ def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.Data
     - For seats 2-4 we synthesize equivalent opening-call rows by *relabeling*
       the requirements into `Agg_Expr_Seat_{seat}` and attaching a `seat` column.
     
+    If `bt_parquet_file` is provided and bt_seat1_df lacks Agg_Expr_Seat_1,
+    we load the required columns directly from disk for ONLY the opening bid rows.
+    This is much more memory efficient than loading them for the entire 461M row game tree.
+    
     Output columns (minimal set used by the API + match engine):
     - index: UInt32 synthetic primary key = bt_index * 4 + (seat-1)
     - bt_index: UInt32 original bt_index from bt_seat1_df (for debugging/reference)
@@ -1487,15 +1512,76 @@ def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.Data
     - Expr: optional expression list/struct passthrough
     - Agg_Expr_Seat_1..4: lists, with exactly one populated (the seat being modeled)
     """
+    # Check if we need to load Agg_Expr from Parquet
+    if "Agg_Expr_Seat_1" not in bt_seat1_df.columns and bt_parquet_file:
+        # Memory-efficient load: ONLY opening bid rows and ONLY required columns
+        # Uses DuckDB for efficient lookup (predicate pushdown) instead of Polars full scan
+        print(f"Building opening bids table from {bt_parquet_file} (on-demand load)...")
+        
+        # IMPORTANT: Do NOT build a massive `IN (...)` list here. Opening bids can be millions
+        # of rows; instead query directly by the boolean predicate.
+        import duckdb
+
+        conn = duckdb.connect(":memory:")
+        try:
+            file_path = str(bt_parquet_file).replace("\\", "/")
+            query = f"""
+                SELECT bt_index, Auction, is_opening_bid, Agg_Expr_Seat_1, Expr
+                FROM read_parquet('{file_path}')
+                WHERE is_opening_bid = TRUE
+            """
+            bt_df_for_build = conn.execute(query).pl()
+        finally:
+            conn.close()
+
+        if bt_df_for_build.is_empty():
+            # No opening bids found - return empty table
+            return pl.DataFrame({
+                "index": pl.Series([], dtype=pl.UInt32),
+                "bt_index": pl.Series([], dtype=pl.UInt32),
+                "seat": pl.Series([], dtype=pl.UInt8),
+                "Auction": pl.Series([], dtype=pl.Utf8),
+                "Agg_Expr_Seat_1": pl.Series([], dtype=pl.List(pl.Utf8)),
+                "Agg_Expr_Seat_2": pl.Series([], dtype=pl.List(pl.Utf8)),
+                "Agg_Expr_Seat_3": pl.Series([], dtype=pl.List(pl.Utf8)),
+                "Agg_Expr_Seat_4": pl.Series([], dtype=pl.List(pl.Utf8)),
+            })
+
+        print(f"  Loaded {bt_df_for_build.height:,} opening bid rows with Agg_Expr (DuckDB)")
+    else:
+        # Use provided DataFrame (may be full or already filtered)
+        bt_df_for_build = bt_seat1_df
+
     required_cols = {"bt_index", "Auction", "is_opening_bid", "Agg_Expr_Seat_1"}
-    missing = sorted(required_cols - set(bt_seat1_df.columns))
+    missing = sorted(required_cols - set(bt_df_for_build.columns))
     if missing:
         raise ValueError(f"bt_seat1_df missing required columns for opening-bid build: {missing}")
 
+    # Detect if we are using the memory-optimized categorical string format.
+    # We check if it is NOT a list type (it could be Categorical or Utf8).
+    dtype = bt_df_for_build.schema.get("Agg_Expr_Seat_1")
+    is_optimized = False
+    if dtype is not None:
+        # Robust check for list type across Polars versions
+        try:
+            # Instances of pl.List have this attribute in most versions
+            is_optimized = not hasattr(dtype, "inner") and not str(dtype).startswith("List")
+        except Exception:
+            # Fallback to string representation check
+            is_optimized = "List" not in str(dtype)
+    
+    if is_optimized:
+        # Optimized format: criteria are pipe-separated strings
+        filter_expr = pl.col("is_opening_bid") & pl.col("Agg_Expr_Seat_1").is_not_null()
+    else:
+        # Legacy format: criteria are lists
+        # We use a more robust way to check for list type and then call list.len()
+        filter_expr = pl.col("is_opening_bid") & pl.col("Agg_Expr_Seat_1").list.len().gt(0)
+
     base = (
-        bt_seat1_df
-        .filter(pl.col("is_opening_bid") & pl.col("Agg_Expr_Seat_1").list.len().gt(1))
-        .select([c for c in ["bt_index", "Auction", "Expr", "Agg_Expr_Seat_1"] if c in bt_seat1_df.columns])
+        bt_df_for_build
+        .filter(filter_expr)
+        .select([c for c in ["bt_index", "Auction", "Expr", "Agg_Expr_Seat_1"] if c in bt_df_for_build.columns])
         .with_columns(
             pl.col("bt_index").cast(pl.UInt32).alias("bt_index"),
             # Opening-bid rows should not need a leading pass prefix. Strip defensively.
@@ -1503,8 +1589,8 @@ def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.Data
         )
     )
 
-    # Empty list literal of the correct dtype for Agg_Expr columns.
-    empty_req_list = pl.lit([], dtype=pl.List(pl.Utf8))
+    # Empty value literal of the correct dtype for Agg_Expr columns.
+    empty_val = pl.lit(None).cast(pl.Categorical) if is_optimized else pl.lit([], dtype=pl.List(pl.Utf8))
 
     per_seat: list[pl.DataFrame] = []
     for seat in (1, 2, 3, 4):
@@ -1513,10 +1599,10 @@ def build_opening_bids_table_from_bt_seat1(bt_seat1_df: pl.DataFrame) -> pl.Data
                 (pl.col("bt_index") * pl.lit(4, dtype=pl.UInt32) + pl.lit(seat - 1, dtype=pl.UInt32)).alias("index"),
                 pl.lit(seat).cast(pl.UInt8).alias("seat"),
                 # Populate only the requested seat's requirements; others are empty.
-                (pl.col("Agg_Expr_Seat_1") if seat == 1 else empty_req_list).alias("Agg_Expr_Seat_1"),
-                (pl.col("Agg_Expr_Seat_1") if seat == 2 else empty_req_list).alias("Agg_Expr_Seat_2"),
-                (pl.col("Agg_Expr_Seat_1") if seat == 3 else empty_req_list).alias("Agg_Expr_Seat_3"),
-                (pl.col("Agg_Expr_Seat_1") if seat == 4 else empty_req_list).alias("Agg_Expr_Seat_4"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 1 else empty_val).alias("Agg_Expr_Seat_1"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 2 else empty_val).alias("Agg_Expr_Seat_2"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 3 else empty_val).alias("Agg_Expr_Seat_3"),
+                (pl.col("Agg_Expr_Seat_1") if seat == 4 else empty_val).alias("Agg_Expr_Seat_4"),
             )
         )
 
@@ -1531,17 +1617,21 @@ def process_opening_bids_from_bt_seat1(
     deal_df: pl.DataFrame,
     bt_seat1_df: pl.DataFrame,
     deal_criteria_by_seat_dfs: Dict[int, Dict[str, pl.DataFrame]],
+    bt_parquet_file: pathlib.Path | str | None = None,
     seats: List[int] | None = None,
     directions: List[str] | None = None,
     opening_directions: List[str] | None = None,
 ) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], pl.DataFrame]:
     """Compute opening-bid candidates using only `bt_seat1_df`.
     
+    If `bt_parquet_file` is provided and bt_seat1_df lacks Agg_Expr columns,
+    they are loaded on-demand from the Parquet file for only the opening bid rows.
+    
     Returns:
     - results: same structure as `process_opening_bids(...)` (candidates + original_indices)
     - bt_openings_df: small lookup table used by the API for display/filtering
     """
-    bt_openings_df = build_opening_bids_table_from_bt_seat1(bt_seat1_df)
+    bt_openings_df = build_opening_bids_table_from_bt_seat1(bt_seat1_df, bt_parquet_file=bt_parquet_file)
 
     elapsed_time = time.time()
     results: Dict[Tuple[str, int], Dict[str, Any]] = {}
