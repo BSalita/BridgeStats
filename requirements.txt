@@ -10,7 +10,7 @@ requests
 sqlalchemy
 sqlalchemy_utils
 streamlit
-streamlit-aggrid
+streamlit-aggrid==1.1.8.post1
 #streamlit-datalist
 streamlit-extras
 seaborn
